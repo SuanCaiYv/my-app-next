@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Personal Studio</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQlh8iNY2Kq27jWvMTAqf8t1p3nZ5a8="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/styles.css?v=20260507-photo-masonry" />
+  </head>
+  <body>
+    <header class="topbar">
+      <button id="brand" class="brand" title="Hello.me">Hello.me</button>
+      <nav class="tabs" aria-label="主导航">
+        <button class="tab active" data-view="posts">文字</button>
+        <button class="tab" data-view="photos">照片</button>
+        <button class="tab" data-view="map">地图</button>
+        <button class="tab owner-only" data-view="chat">对话</button>
+        <button class="tab owner-only" data-view="analyze">LLM 分析</button>
+      </nav>
+      <div class="role" id="roleLabel">游客</div>
+    </header>
+
+    <main>
+      <section class="workspace">
+        <aside class="sidebar">
+          <div class="field">
+            <label for="search">搜索</label>
+            <input id="search" placeholder="标题、正文、标签" />
+          </div>
+          <div class="field">
+            <label for="categoryFilter">分类</label>
+            <select id="categoryFilter" class="native-hidden"></select>
+            <div class="custom-select" data-select-id="categoryFilter">
+              <button class="custom-select-button" type="button">
+                <span>全部</span>
+                <span class="custom-select-arrow">⌄</span>
+              </button>
+              <div class="custom-select-menu"></div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="kindFilter">类型</label>
+            <select id="kindFilter" class="native-hidden">
+              <option value="">全部</option>
+              <option value="article">文章</option>
+              <option value="thought">想法</option>
+              <option value="note">随手写</option>
+            </select>
+            <div class="custom-select" data-select-id="kindFilter">
+              <button class="custom-select-button" type="button">
+                <span>全部</span>
+                <span class="custom-select-arrow">⌄</span>
+              </button>
+              <div class="custom-select-menu"></div>
+            </div>
+          </div>
+          <div class="sidebar-row">
+            <button id="newPostBtn" class="primary owner-only">写点什么</button>
+            <button id="newPhotoBtn" class="primary owner-only">上传照片</button>
+          </div>
+        </aside>
+
+        <section id="postsView" class="view active">
+          <div id="postList" class="list"></div>
+        </section>
+
+        <section id="photosView" class="view">
+          <div id="photoList" class="photo-grid"></div>
+        </section>
+
+        <section id="mapView" class="view">
+          <div class="map-panel">
+            <div id="photoMap" class="photo-map"></div>
+            <div id="mapFallback" class="map-fallback"></div>
+          </div>
+        </section>
+
+        <section id="chatView" class="view">
+          <div class="chat-layout">
+            <section class="chat-context">
+              <div class="section-head">
+                <h3>对话上下文</h3>
+              </div>
+              <div class="field">
+                <label for="chatFreeText">指定片段</label>
+                <textarea id="chatFreeText" rows="5" placeholder="可补充本次对话的临时上下文"></textarea>
+              </div>
+              <div class="picker-grid compact-grid">
+                <div class="picker-panel">
+                  <div class="picker-head">
+                    <h3>选择文字</h3>
+                    <button class="small-button" data-open-picker="posts" data-picker-target="chat">展开</button>
+                  </div>
+                  <div id="chatPosts" class="check-list"></div>
+                </div>
+                <div class="picker-panel">
+                  <div class="picker-head">
+                    <h3>选择照片</h3>
+                    <button class="small-button" data-open-picker="photos" data-picker-target="chat">展开</button>
+                  </div>
+                  <div id="chatPhotos" class="check-list"></div>
+                </div>
+              </div>
+            </section>
+            <section class="chat-panel">
+              <div class="chat-header">
+                <div class="chat-session-bar">
+                  <select id="chatSessionSelect" class="native-hidden"><option value="">新对话</option></select>
+                  <div class="custom-select" data-select-id="chatSessionSelect">
+                    <button class="custom-select-button" type="button">
+                      <span>新对话</span>
+                      <span class="custom-select-arrow">⌄</span>
+                    </button>
+                    <div class="custom-select-menu"></div>
+                  </div>
+                  <button id="deleteSessionBtn" class="small-button" title="删除当前会话">删除</button>
+                </div>
+                <div class="section-head">
+                  <div>
+                    <div id="chatContextSummary" class="context-summary"></div>
+                  </div>
+                  <div class="head-actions">
+                    <button id="clearChatBtn">清空</button>
+                    <button id="newChatBtn" class="primary">新对话</button>
+                  </div>
+                </div>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <form id="chatForm" class="chat-form">
+                <textarea id="chatInput" rows="3" placeholder="基于选中的内容提问"></textarea>
+                <button id="sendChatBtn" class="primary">发送</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="analyzeView" class="view">
+          <div class="analysis-panel">
+            <div class="config-head">
+              <div>
+                <h2>LLM 设置</h2>
+                <span id="llmSaveStatus" class="save-status">已保存</span>
+              </div>
+              <button id="toggleConfigBtn">收起</button>
+            </div>
+            <div id="llmConfigBody" class="config-body">
+              <div class="two-col">
+                <div class="field">
+                  <label for="apiKey">API Key</label>
+                  <input id="apiKey" type="password" placeholder="sk-..." />
+                </div>
+                <div class="field">
+                  <label for="modelPreset">模型</label>
+                  <select id="modelPreset">
+                    <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                    <option value="gpt-4.1">gpt-4.1</option>
+                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                    <option value="gpt-4o">gpt-4o</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    <option value="deepseek-chat">deepseek-chat</option>
+                    <option value="deepseek-reasoner">deepseek-reasoner</option>
+                    <option value="qwen-plus">qwen-plus</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field" id="customModelField">
+                <label for="model">自定义模型名</label>
+                <input id="model" value="gpt-4.1-mini" />
+              </div>
+              <div class="field">
+                <label for="baseUrl">Base URL</label>
+                <input id="baseUrl" value="https://api.openai.com" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="analysisPrompt">分析要求</label>
+              <textarea id="analysisPrompt" rows="4">请帮我总结这些内容的主题、情绪、可延展方向，并给出 5 个可以继续写作的问题。</textarea>
+            </div>
+            <div class="field">
+              <label for="freeText">指定片段</label>
+              <textarea id="freeText" rows="4" placeholder="也可以只分析这里粘贴的一小段"></textarea>
+            </div>
+            <div class="picker-grid">
+              <div class="picker-panel">
+                <div class="picker-head">
+                  <h3>选择文字</h3>
+                  <button class="small-button" data-open-picker="posts">展开</button>
+                </div>
+                <div id="analysisPosts" class="check-list"></div>
+              </div>
+              <div class="picker-panel">
+                <div class="picker-head">
+                  <h3>选择照片</h3>
+                  <button class="small-button" data-open-picker="photos">展开</button>
+                </div>
+                <div id="analysisPhotos" class="check-list"></div>
+              </div>
+            </div>
+            <button id="runAnalyzeBtn" class="primary">开始分析</button>
+            <div id="analysisResult" class="result markdown"></div>
+            <section class="analysis-history">
+              <div class="section-head">
+                <h3>分析历史</h3>
+                <span id="analysisCount"></span>
+              </div>
+              <div id="analysisHistory" class="history-list"></div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="loginDialog">
+      <form method="dialog" class="dialog-body">
+        <h2>欢迎来到我的世界</h2>
+        <input id="password" type="password" placeholder="密码" />
+        <div class="dialog-actions">
+          <button value="cancel">取消</button>
+          <button id="loginBtn" class="primary" value="default">登录</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="postDialog">
+      <form method="dialog" class="dialog-body wide">
+        <h2 id="postDialogTitle">编辑文字</h2>
+        <input id="postId" type="hidden" />
+        <div class="two-col">
+          <div class="field">
+            <label for="postTitle">标题</label>
+            <div class="inline-input">
+              <input id="postTitle" />
+              <button id="generateTitleBtn" class="tool-button" value="default" title="AI 生成标题">AI</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="postCategory">分类</label>
+            <input id="postCategory" placeholder="生活 / 技术 / 读书" />
+          </div>
+        </div>
+        <div class="three-col">
+          <div class="field">
+            <label for="postKind">类型</label>
+            <select id="postKind">
+              <option value="article">文章</option>
+              <option value="thought">想法</option>
+              <option value="note">随手写</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="postStatus">状态</label>
+            <select id="postStatus">
+              <option value="draft">草稿</option>
+              <option value="published">发布</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="postTags">标签</label>
+            <input id="postTags" placeholder="逗号分隔" />
+          </div>
+        </div>
+        <div class="field datetime-field">
+          <label for="postUpdatedAtDisplay">时间</label>
+          <input id="postUpdatedAt" type="hidden" />
+          <button id="postUpdatedAtDisplay" class="datetime-display" type="button"></button>
+          <div id="datetimePopover" class="ios-datetime-popover" hidden>
+            <div class="ios-date-head">
+              <button id="prevPickerMonth" type="button" aria-label="上个月">‹</button>
+              <strong id="pickerMonthLabel"></strong>
+              <button id="nextPickerMonth" type="button" aria-label="下个月">›</button>
+            </div>
+            <div class="ios-date-week">
+              <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+            </div>
+            <div id="pickerCalendar" class="ios-calendar"></div>
+            <div class="ios-time-panel">
+              <div id="pickerHours" class="ios-time-wheel" aria-label="小时"></div>
+              <div id="pickerMinutes" class="ios-time-wheel" aria-label="分钟"></div>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="postBody">内容</label>
+          <textarea id="postBody" rows="14"></textarea>
+        </div>
+        <div class="dialog-actions">
+          <button id="deletePostBtn" class="danger" value="default">删除</button>
+          <span class="spacer"></span>
+          <button value="cancel">取消</button>
+          <button id="savePostBtn" class="primary" value="default">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="postViewDialog">
+      <article class="dialog-body wide reader">
+        <div class="reader-head">
+          <div>
+            <h2 id="viewPostTitle"></h2>
+            <div id="viewPostMeta" class="meta"></div>
+          </div>
+          <button id="closePostViewBtn">关闭</button>
+        </div>
+        <div id="viewPostBody" class="reader-body"></div>
+        <div class="dialog-actions owner-only">
+          <span class="spacer"></span>
+          <button id="editFromViewBtn" class="primary">编辑</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="photoDialog">
+      <form method="dialog" class="dialog-body wide">
+        <h2 id="photoDialogTitle">照片</h2>
+        <input id="photoId" type="hidden" />
+        <div id="fileField" class="field">
+          <label for="photoFile">图片</label>
+          <input id="photoFile" type="file" accept="image/*" />
+        </div>
+        <div class="two-col">
+          <div class="field">
+            <label for="photoTitle">标题</label>
+            <input id="photoTitle" />
+          </div>
+          <div class="field">
+            <label for="photoCategory">分类</label>
+            <input id="photoCategory" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="photoTags">标签</label>
+          <input id="photoTags" placeholder="逗号分隔" />
+        </div>
+        <div class="field">
+          <label for="photoDescription">说明</label>
+          <textarea id="photoDescription" rows="5"></textarea>
+        </div>
+        <div class="dialog-actions">
+          <button id="deletePhotoBtn" class="danger" value="default">删除</button>
+          <span class="spacer"></span>
+          <button value="cancel">取消</button>
+          <button id="savePhotoBtn" class="primary" value="default">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="photoPreviewDialog">
+      <section class="dialog-body wide photo-preview-dialog">
+        <div class="reader-head">
+          <div>
+            <h2 id="previewPhotoTitle"></h2>
+            <div id="previewPhotoMeta" class="meta"></div>
+          </div>
+          <button id="closePhotoPreviewBtn" class="dialog-button">关闭</button>
+        </div>
+        <img id="previewPhotoImage" alt="" />
+        <p id="previewPhotoDescription"></p>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <a id="downloadPhotoLink" class="button-link primary" download>下载</a>
+        </div>
+      </section>
+    </dialog>
+
+    <dialog id="pickerDialog">
+      <section class="dialog-body wide picker-dialog">
+        <div class="reader-head">
+          <h2 id="pickerDialogTitle">选择内容</h2>
+          <button id="closePickerBtn" class="dialog-button">关闭</button>
+        </div>
+        <div id="pickerDialogList" class="large-check-list"></div>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button id="applyPickerBtn" class="primary dialog-button">应用选择</button>
+        </div>
+      </section>
+    </dialog>
+
+    <div id="toast" class="toast"></div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/app.js?v=20260507-chat-enter-select"></script>
+  </body>
+</html>

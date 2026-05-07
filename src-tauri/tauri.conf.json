@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hello.me",
+  "version": "0.1.0",
+  "identifier": "me.hello.personal-studio",
+  "build": {
+    "frontendDist": "http://127.0.0.1:34867"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [],
+    "resources": ["../static"],
+    "targets": ["app"]
+  }
+}
