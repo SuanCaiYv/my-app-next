@@ -6,6 +6,6 @@ use anyhow::Result;
 async fn main() -> Result<()> {
     personal_studio::init_tracing();
 
-    let addr: SocketAddr = "127.0.0.1:3000".parse()?;
+    let addr: SocketAddr = "0.0.0.0:3003".parse()?;
     personal_studio::run_server(PathBuf::from("data"), PathBuf::from("static"), addr).await
 }

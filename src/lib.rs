@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
-    extract::{Multipart, Path as AxumPath, State},
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -19,6 +19,7 @@ use axum::{
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use exif::{In, Reader as ExifReader, Tag, Value as ExifValue};
+use image::{codecs::jpeg::JpegEncoder, ImageReader};
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -26,10 +27,14 @@ use serde_json::{json, Value};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use uuid::Uuid;
 
+const MAX_PHOTO_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+const PHOTO_THUMB_MAX_SIZE: u32 = 720;
+
 #[derive(Clone)]
 struct AppState {
     db_path: PathBuf,
     uploads_dir: PathBuf,
+    static_dir: PathBuf,
     owner_password: String,
     sessions: Arc<Mutex<HashSet<String>>>,
     http: Client,
@@ -59,6 +64,7 @@ struct PhotoItem {
     original_name: String,
     mime: String,
     url: String,
+    thumbnail_url: String,
     latitude: Option<f64>,
     longitude: Option<f64>,
     created_at: String,
@@ -184,24 +190,42 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
     let state = AppState {
         db_path,
         uploads_dir: uploads_dir.clone(),
+        static_dir: static_dir.clone(),
         owner_password,
         sessions: Arc::new(Mutex::new(HashSet::new())),
         http: Client::new(),
     };
 
     let app = Router::new()
+        .route("/", get(serve_index))
+        .route("/index.html", get(serve_index))
+        .route("/app.js", get(serve_app_js))
+        .route("/styles.css", get(serve_styles_css))
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(me))
         .route("/api/posts", get(list_posts).post(create_post))
         .route("/api/posts/{id}", put(update_post).delete(delete_post))
-        .route("/api/photos", get(list_photos).post(upload_photo))
+        .route(
+            "/api/photos",
+            get(list_photos)
+                .post(upload_photo)
+                .layer(DefaultBodyLimit::max(MAX_PHOTO_UPLOAD_BYTES)),
+        )
         .route("/api/photos/{id}", put(update_photo).delete(delete_photo))
         .route("/api/analyses", get(list_analyses))
         .route("/api/analyses/{id}", delete(delete_analysis))
         .route("/api/analyze", post(analyze))
         .route("/api/chat", post(chat))
-        .route("/api/chat-sessions", get(list_chat_sessions).post(create_chat_session))
-        .route("/api/chat-sessions/{id}", get(get_chat_session).put(update_chat_session).delete(delete_chat_session))
+        .route(
+            "/api/chat-sessions",
+            get(list_chat_sessions).post(create_chat_session),
+        )
+        .route(
+            "/api/chat-sessions/{id}",
+            get(get_chat_session)
+                .put(update_chat_session)
+                .delete(delete_chat_session),
+        )
         .nest_service("/uploads", ServeDir::new(uploads_dir.clone()))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .layer(TraceLayer::new_for_http())
@@ -273,6 +297,47 @@ fn init_db(path: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn serve_index(State(state): State<AppState>) -> ApiResult<Response> {
+    serve_no_cache_text(
+        state.static_dir.join("index.html"),
+        "text/html; charset=utf-8",
+    )
+    .await
+}
+
+async fn serve_app_js(State(state): State<AppState>) -> ApiResult<Response> {
+    serve_no_cache_text(
+        state.static_dir.join("app.js"),
+        "text/javascript; charset=utf-8",
+    )
+    .await
+}
+
+async fn serve_styles_css(State(state): State<AppState>) -> ApiResult<Response> {
+    serve_no_cache_text(
+        state.static_dir.join("styles.css"),
+        "text/css; charset=utf-8",
+    )
+    .await
+}
+
+async fn serve_no_cache_text(path: PathBuf, content_type: &'static str) -> ApiResult<Response> {
+    let body = tokio::fs::read_to_string(path).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CACHE_CONTROL,
+                "no-store, no-cache, max-age=0, must-revalidate",
+            ),
+            (header::PRAGMA, "no-cache"),
+            (header::EXPIRES, "0"),
+        ],
+        body,
+    )
+        .into_response())
+}
+
 async fn login(
     State(state): State<AppState>,
     Json(input): Json<LoginRequest>,
@@ -320,7 +385,10 @@ async fn create_post(
     require_owner(&state, &headers)?;
     validate_post(&input)?;
     let created_at = Utc::now().to_rfc3339();
-    let updated_at = input.updated_at.filter(|s| !s.is_empty()).unwrap_or_else(|| Utc::now().to_rfc3339());
+    let updated_at = input
+        .updated_at
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
     let conn = Connection::open(&state.db_path)?;
     conn.execute(
         "insert into posts (title, body, kind, status, category, tags, created_at, updated_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -338,7 +406,10 @@ async fn update_post(
 ) -> ApiResult<Json<PostItem>> {
     require_owner(&state, &headers)?;
     validate_post(&input)?;
-    let updated_at = input.updated_at.filter(|s| !s.is_empty()).unwrap_or_else(|| Utc::now().to_rfc3339());
+    let updated_at = input
+        .updated_at
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
     let conn = Connection::open(&state.db_path)?;
     let changed = conn.execute(
         "update posts set title = ?1, body = ?2, kind = ?3, status = ?4, category = ?5, tags = ?6, updated_at = ?7 where id = ?8",
@@ -362,13 +433,19 @@ async fn delete_post(
 }
 
 async fn list_photos(State(state): State<AppState>) -> ApiResult<Json<Vec<PhotoItem>>> {
-    let conn = Connection::open(&state.db_path)?;
-    let mut stmt = conn.prepare(
-        "select id, title, description, category, tags, filename, original_name, mime, latitude, longitude, created_at, updated_at from photos order by updated_at desc",
-    )?;
-    let rows = stmt
-        .query_map([], photo_from_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = {
+        let conn = Connection::open(&state.db_path)?;
+        let mut stmt = conn.prepare(
+            "select id, title, description, category, tags, filename, original_name, mime, latitude, longitude, created_at, updated_at from photos order by updated_at desc",
+        )?;
+        let rows = stmt
+            .query_map([], photo_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for photo in &rows {
+        ensure_photo_thumbnail(&state.uploads_dir, &photo.filename).await?;
+    }
     Ok(Json(rows))
 }
 
@@ -384,7 +461,7 @@ async fn upload_photo(
     let mut tags = String::new();
     let mut file: Option<(String, String, Bytes)> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(anyhow::Error::from)? {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
         let name = field.name().unwrap_or_default().to_string();
         if name == "file" {
             let original = field.file_name().unwrap_or("photo").to_string();
@@ -392,10 +469,10 @@ async fn upload_photo(
                 .content_type()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            let bytes = field.bytes().await.map_err(anyhow::Error::from)?;
+            let bytes = field.bytes().await.map_err(multipart_error)?;
             file = Some((original, mime, bytes));
         } else {
-            let value = field.text().await.map_err(anyhow::Error::from)?;
+            let value = field.text().await.map_err(multipart_error)?;
             match name.as_str() {
                 "title" => title = value,
                 "description" => description = value,
@@ -417,6 +494,7 @@ async fn upload_photo(
     let location = extract_gps_location(&bytes);
     let filename = format!("{}.{}", Uuid::new_v4(), ext);
     tokio::fs::write(state.uploads_dir.join(&filename), bytes).await?;
+    ensure_photo_thumbnail(&state.uploads_dir, &filename).await?;
 
     let now = Utc::now().to_rfc3339();
     let conn = Connection::open(&state.db_path)?;
@@ -466,7 +544,8 @@ async fn delete_photo(
         filename
     };
     if let Some(filename) = filename {
-        let _ = tokio::fs::remove_file(state.uploads_dir.join(filename)).await;
+        let _ = tokio::fs::remove_file(state.uploads_dir.join(&filename)).await;
+        let _ = tokio::fs::remove_file(state.uploads_dir.join(thumbnail_filename(&filename))).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -903,6 +982,60 @@ fn validate_post(input: &PostInput) -> ApiResult<()> {
     Ok(())
 }
 
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> ApiError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "图片不能超过 50MB");
+    }
+
+    ApiError::new(StatusCode::BAD_REQUEST, error.body_text())
+}
+
+async fn ensure_photo_thumbnail(uploads_dir: &Path, filename: &str) -> ApiResult<()> {
+    let thumbnail = thumbnail_filename(filename);
+    let thumbnail_path = uploads_dir.join(&thumbnail);
+    if tokio::fs::try_exists(&thumbnail_path)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let source_path = uploads_dir.join(filename);
+    let bytes = match tokio::fs::read(source_path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(()),
+    };
+    let thumbnail_bytes = tokio::task::spawn_blocking(move || create_thumbnail_bytes(bytes))
+        .await
+        .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    if let Some(thumbnail_bytes) = thumbnail_bytes {
+        tokio::fs::write(thumbnail_path, thumbnail_bytes).await?;
+    }
+    Ok(())
+}
+
+fn create_thumbnail_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    let image = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let thumbnail = image.thumbnail(PHOTO_THUMB_MAX_SIZE, PHOTO_THUMB_MAX_SIZE);
+    let mut output = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut output, 78);
+    encoder.encode_image(&thumbnail).ok()?;
+    Some(output)
+}
+
+fn thumbnail_filename(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .filter(|item| !item.is_empty())
+        .unwrap_or(filename);
+    format!("thumb-{stem}.jpg")
+}
+
 fn load_post(conn: &Connection, id: i64) -> ApiResult<PostItem> {
     conn.query_row(
         "select id, title, body, kind, status, category, tags, created_at, updated_at from posts where id = ?1",
@@ -946,6 +1079,7 @@ fn photo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhotoItem> {
         category: row.get(3)?,
         tags: row.get(4)?,
         url: format!("/uploads/{filename}"),
+        thumbnail_url: format!("/uploads/{}", thumbnail_filename(&filename)),
         filename,
         original_name: row.get(6)?,
         mime: row.get(7)?,

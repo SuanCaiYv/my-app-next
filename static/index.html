@@ -10,9 +10,35 @@
       integrity="sha256-p4NxAoJBhIINfQlh8iNY2Kq27jWvMTAqf8t1p3nZ5a8="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/styles.css?v=20260507-photo-masonry" />
+    <link rel="stylesheet" href="/styles.css?v=20260509-photo-thumbs" />
   </head>
   <body>
+    <svg class="liquid-glass-defs" aria-hidden="true" focusable="false">
+      <filter
+        id="liquid-glass-refraction"
+        x="-24%"
+        y="-24%"
+        width="148%"
+        height="148%"
+        color-interpolation-filters="sRGB"
+      >
+        <feTurbulence
+          type="fractalNoise"
+          baseFrequency="0.012 0.018"
+          numOctaves="2"
+          seed="37"
+          result="liquid-noise"
+        />
+        <feGaussianBlur in="liquid-noise" stdDeviation="1.3" result="liquid-map" />
+        <feDisplacementMap
+          in="SourceGraphic"
+          in2="liquid-map"
+          scale="18"
+          xChannelSelector="R"
+          yChannelSelector="G"
+        />
+      </filter>
+    </svg>
     <header class="topbar">
       <button id="brand" class="brand" title="Hello.me">Hello.me</button>
       <nav class="tabs" aria-label="主导航">
@@ -28,14 +54,14 @@
     <main>
       <section class="workspace">
         <aside class="sidebar">
-          <div class="field">
+          <div class="field sidebar-field">
             <label for="search">搜索</label>
             <input id="search" placeholder="标题、正文、标签" />
           </div>
-          <div class="field">
+          <div class="field sidebar-field">
             <label for="categoryFilter">分类</label>
             <select id="categoryFilter" class="native-hidden"></select>
-            <div class="custom-select" data-select-id="categoryFilter">
+            <div class="custom-select" data-select-id="categoryFilter" data-placeholder="分类">
               <button class="custom-select-button" type="button">
                 <span>全部</span>
                 <span class="custom-select-arrow">⌄</span>
@@ -43,7 +69,7 @@
               <div class="custom-select-menu"></div>
             </div>
           </div>
-          <div class="field">
+          <div class="field sidebar-field kind-field">
             <label for="kindFilter">类型</label>
             <select id="kindFilter" class="native-hidden">
               <option value="">全部</option>
@@ -51,7 +77,7 @@
               <option value="thought">想法</option>
               <option value="note">随手写</option>
             </select>
-            <div class="custom-select" data-select-id="kindFilter">
+            <div class="custom-select" data-select-id="kindFilter" data-placeholder="类型">
               <button class="custom-select-button" type="button">
                 <span>全部</span>
                 <span class="custom-select-arrow">⌄</span>
@@ -60,8 +86,14 @@
             </div>
           </div>
           <div class="sidebar-row">
-            <button id="newPostBtn" class="primary owner-only">写点什么</button>
-            <button id="newPhotoBtn" class="primary owner-only">上传照片</button>
+            <button id="newPostBtn" class="primary owner-only">
+              <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span class="btn-label">写点什么</span>
+            </button>
+            <button id="newPhotoBtn" class="primary owner-only">
+              <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span class="btn-label">上传照片</span>
+            </button>
           </div>
         </aside>
 
@@ -118,22 +150,18 @@
                     </button>
                     <div class="custom-select-menu"></div>
                   </div>
+                  <button id="renameSessionBtn" class="small-button" title="重命名当前会话">重命名</button>
                   <button id="deleteSessionBtn" class="small-button" title="删除当前会话">删除</button>
                 </div>
-                <div class="section-head">
-                  <div>
-                    <div id="chatContextSummary" class="context-summary"></div>
-                  </div>
-                  <div class="head-actions">
-                    <button id="clearChatBtn">清空</button>
-                    <button id="newChatBtn" class="primary">新对话</button>
-                  </div>
+                <div class="head-actions">
+                  <button id="clearChatBtn">清空</button>
+                  <button id="newChatBtn" class="primary">新对话</button>
                 </div>
               </div>
               <div id="chatMessages" class="chat-messages"></div>
+              <div id="chatContextSummary" class="context-summary chat-context-bar"></div>
               <form id="chatForm" class="chat-form">
                 <textarea id="chatInput" rows="3" placeholder="基于选中的内容提问"></textarea>
-                <button id="sendChatBtn" class="primary">发送</button>
               </form>
             </section>
           </div>
@@ -218,84 +246,86 @@
     </main>
 
     <dialog id="loginDialog">
-      <form method="dialog" class="dialog-body">
-        <h2>欢迎来到我的世界</h2>
+      <form method="dialog" class="dialog-body login-dialog">
         <input id="password" type="password" placeholder="密码" />
-        <div class="dialog-actions">
-          <button value="cancel">取消</button>
-          <button id="loginBtn" class="primary" value="default">登录</button>
-        </div>
       </form>
     </dialog>
 
     <dialog id="postDialog">
       <form method="dialog" class="dialog-body wide">
-        <h2 id="postDialogTitle">编辑文字</h2>
         <input id="postId" type="hidden" />
-        <div class="two-col">
-          <div class="field">
+        <div class="post-meta-grid">
+          <div class="field post-title-field">
             <label for="postTitle">标题</label>
-            <div class="inline-input">
-              <input id="postTitle" />
-              <button id="generateTitleBtn" class="tool-button" value="default" title="AI 生成标题">AI</button>
-            </div>
+            <input id="postTitle" placeholder="标题" />
           </div>
-          <div class="field">
+          <div class="field post-title-ai-field">
+            <label for="generateTitleBtn">AI</label>
+            <button id="generateTitleBtn" class="tool-button" value="default" title="AI 生成标题">AI</button>
+          </div>
+          <div class="field post-category-field">
             <label for="postCategory">分类</label>
-            <input id="postCategory" placeholder="生活 / 技术 / 读书" />
+            <input id="postCategory" placeholder="分类 / 生活 / 技术 / 读书" />
           </div>
-        </div>
-        <div class="three-col">
-          <div class="field">
+          <div class="field post-tags-field">
+            <label for="postTags">标签</label>
+            <input id="postTags" placeholder="标签 / 逗号分隔" />
+          </div>
+          <div class="field post-kind-field">
             <label for="postKind">类型</label>
-            <select id="postKind">
+            <select id="postKind" class="native-hidden">
               <option value="article">文章</option>
               <option value="thought">想法</option>
               <option value="note">随手写</option>
             </select>
+            <div class="custom-select" data-select-id="postKind">
+              <button class="custom-select-button" type="button" aria-label="类型">
+                <span></span>
+                <span class="custom-select-arrow">⌄</span>
+              </button>
+              <div class="custom-select-menu"></div>
+            </div>
           </div>
-          <div class="field">
+          <div class="field post-status-field">
             <label for="postStatus">状态</label>
-            <select id="postStatus">
+            <select id="postStatus" class="native-hidden">
               <option value="draft">草稿</option>
               <option value="published">发布</option>
             </select>
+            <div class="custom-select" data-select-id="postStatus">
+              <button class="custom-select-button" type="button" aria-label="状态">
+                <span></span>
+                <span class="custom-select-arrow">⌄</span>
+              </button>
+              <div class="custom-select-menu"></div>
+            </div>
           </div>
-          <div class="field">
-            <label for="postTags">标签</label>
-            <input id="postTags" placeholder="逗号分隔" />
+          <div class="field datetime-field">
+            <label for="postUpdatedAtDisplay">时间</label>
+            <input id="postUpdatedAt" type="hidden" />
+            <button id="postUpdatedAtDisplay" class="datetime-display" type="button"></button>
+            <div id="datetimePopover" class="ios-datetime-popover" hidden>
+              <div class="ios-date-head">
+                <button id="prevPickerMonth" type="button" aria-label="上个月">‹</button>
+                <strong id="pickerMonthLabel"></strong>
+                <button id="nextPickerMonth" type="button" aria-label="下个月">›</button>
+              </div>
+              <div class="ios-date-week">
+                <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+              </div>
+              <div id="pickerCalendar" class="ios-calendar"></div>
+              <div class="ios-time-panel">
+                <div id="pickerHours" class="ios-time-wheel" aria-label="小时"></div>
+                <div id="pickerMinutes" class="ios-time-wheel" aria-label="分钟"></div>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="field datetime-field">
-          <label for="postUpdatedAtDisplay">时间</label>
-          <input id="postUpdatedAt" type="hidden" />
-          <button id="postUpdatedAtDisplay" class="datetime-display" type="button"></button>
-          <div id="datetimePopover" class="ios-datetime-popover" hidden>
-            <div class="ios-date-head">
-              <button id="prevPickerMonth" type="button" aria-label="上个月">‹</button>
-              <strong id="pickerMonthLabel"></strong>
-              <button id="nextPickerMonth" type="button" aria-label="下个月">›</button>
-            </div>
-            <div class="ios-date-week">
-              <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
-            </div>
-            <div id="pickerCalendar" class="ios-calendar"></div>
-            <div class="ios-time-panel">
-              <div id="pickerHours" class="ios-time-wheel" aria-label="小时"></div>
-              <div id="pickerMinutes" class="ios-time-wheel" aria-label="分钟"></div>
-            </div>
-          </div>
-        </div>
-        <div class="field">
+        <div class="field post-body-field">
           <label for="postBody">内容</label>
-          <textarea id="postBody" rows="14"></textarea>
+          <textarea id="postBody" rows="14" placeholder="内容"></textarea>
         </div>
-        <div class="dialog-actions">
-          <button id="deletePostBtn" class="danger" value="default">删除</button>
-          <span class="spacer"></span>
-          <button value="cancel">取消</button>
-          <button id="savePostBtn" class="primary" value="default">保存</button>
-        </div>
+        <button id="deletePostBtn" class="danger" value="default">删除</button>
       </form>
     </dialog>
 
@@ -306,25 +336,23 @@
             <h2 id="viewPostTitle"></h2>
             <div id="viewPostMeta" class="meta"></div>
           </div>
-          <button id="closePostViewBtn">关闭</button>
+          <div class="head-actions">
+            <button id="closePostViewBtn">关闭</button>
+            <button id="editFromViewBtn" class="primary owner-only">编辑</button>
+          </div>
         </div>
         <div id="viewPostBody" class="reader-body"></div>
-        <div class="dialog-actions owner-only">
-          <span class="spacer"></span>
-          <button id="editFromViewBtn" class="primary">编辑</button>
-        </div>
       </article>
     </dialog>
 
     <dialog id="photoDialog">
       <form method="dialog" class="dialog-body wide">
-        <h2 id="photoDialogTitle">照片</h2>
         <input id="photoId" type="hidden" />
         <div id="fileField" class="field">
           <label for="photoFile">图片</label>
           <input id="photoFile" type="file" accept="image/*" />
         </div>
-        <div class="two-col">
+        <div class="three-col">
           <div class="field">
             <label for="photoTitle">标题</label>
             <input id="photoTitle" />
@@ -333,10 +361,10 @@
             <label for="photoCategory">分类</label>
             <input id="photoCategory" />
           </div>
-        </div>
-        <div class="field">
-          <label for="photoTags">标签</label>
-          <input id="photoTags" placeholder="逗号分隔" />
+          <div class="field">
+            <label for="photoTags">标签</label>
+            <input id="photoTags" placeholder="逗号分隔" />
+          </div>
         </div>
         <div class="field">
           <label for="photoDescription">说明</label>
@@ -344,9 +372,6 @@
         </div>
         <div class="dialog-actions">
           <button id="deletePhotoBtn" class="danger" value="default">删除</button>
-          <span class="spacer"></span>
-          <button value="cancel">取消</button>
-          <button id="savePhotoBtn" class="primary" value="default">保存</button>
         </div>
       </form>
     </dialog>
@@ -371,16 +396,14 @@
 
     <dialog id="pickerDialog">
       <section class="dialog-body wide picker-dialog">
-        <div class="reader-head">
-          <h2 id="pickerDialogTitle">选择内容</h2>
-          <button id="closePickerBtn" class="dialog-button">关闭</button>
-        </div>
         <div id="pickerDialogList" class="large-check-list"></div>
-        <div class="dialog-actions">
-          <span class="spacer"></span>
-          <button id="applyPickerBtn" class="primary dialog-button">应用选择</button>
-        </div>
       </section>
+    </dialog>
+
+    <dialog id="renameSessionDialog">
+      <form id="renameSessionForm" method="dialog" class="dialog-body rename-session-dialog">
+        <input id="renameSessionTitle" maxlength="60" autocomplete="off" aria-label="会话名" />
+      </form>
     </dialog>
 
     <div id="toast" class="toast"></div>
@@ -389,6 +412,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/app.js?v=20260507-chat-enter-select"></script>
+    <script src="/app.js?v=20260509-photo-thumbs"></script>
   </body>
 </html>

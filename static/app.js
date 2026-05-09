@@ -22,9 +22,27 @@ const state = {
   },
   map: null,
   mapMarkers: [],
+  photoPreviewLoadId: 0,
+  renderKeys: {},
 };
 
 const $ = (id) => document.getElementById(id);
+
+function showPhotoPreviewBackdrop() {
+  let backdrop = $("photoPreviewBackdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.id = "photoPreviewBackdrop";
+    backdrop.className = "photo-preview-backdrop-layer";
+    document.body.appendChild(backdrop);
+  }
+  backdrop.hidden = false;
+}
+
+function hidePhotoPreviewBackdrop() {
+  const backdrop = $("photoPreviewBackdrop");
+  if (backdrop) backdrop.hidden = true;
+}
 
 const api = async (path, options = {}) => {
   const headers = options.headers || {};
@@ -62,7 +80,11 @@ function parseDatetimeLocal(value) {
 function formatDatetimeDisplay(value) {
   const date = parseDatetimeLocal(value);
   const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatDateTimeText(value) {
+  return formatDatetimeDisplay(toDatetimeLocal(new Date(value)));
 }
 
 function setPostUpdatedAtValue(date) {
@@ -73,6 +95,10 @@ function setPostUpdatedAtValue(date) {
 
 function statusName(status) {
   return status === "published" ? "发布" : "草稿";
+}
+
+function statusPillClass(status) {
+  return status === "published" ? "pill-status-published" : "pill-status-draft";
 }
 
 function escapeHtml(value = "") {
@@ -87,6 +113,19 @@ function escapeHtml(value = "") {
 
 function matches(text, query) {
   return text.toLowerCase().includes(query.toLowerCase());
+}
+
+function photoMasonryColumnCount() {
+  const photoList = $("photoList");
+  if (!photoList || photoList.clientWidth === 0) return 3;
+  const containerWidth = photoList.clientWidth;
+  const minColumnWidth = 300;
+  const gap = 18;
+  return Math.max(1, Math.floor((containerWidth + gap) / (minColumnWidth + gap)));
+}
+
+function photoThumbnailUrl(photo) {
+  return photo.thumbnail_url || photo.url;
 }
 
 async function boot() {
@@ -120,6 +159,7 @@ async function loadAll() {
   state.posts = posts;
   state.photos = photos;
   state.analyses = analyses;
+  state.renderKeys = {};
   populateCategories();
   syncCustomSelect("categoryFilter");
   renderAnalysisPickers();
@@ -163,7 +203,9 @@ function syncCustomSelect(selectId) {
   const custom = document.querySelector(`.custom-select[data-select-id="${selectId}"]`);
   if (!custom) return;
   const current = select.options[select.selectedIndex];
-  custom.querySelector(".custom-select-button span").textContent = current?.textContent || "全部";
+  const placeholder = custom.dataset.placeholder;
+  custom.querySelector(".custom-select-button span").textContent =
+    placeholder && !select.value ? placeholder : current?.textContent || "全部";
   custom.querySelector(".custom-select-menu").innerHTML = [...select.options].map((option) => `
     <button
       type="button"
@@ -188,7 +230,7 @@ function syncCustomSelect(selectId) {
 function bindEvents() {
   let taps = 0;
   let lastTap = 0;
-  $("brand").addEventListener("click", () => {
+  $("brand").addEventListener("click", async () => {
     const now = Date.now();
     taps = now - lastTap > 1200 ? 1 : taps + 1;
     lastTap = now;
@@ -197,8 +239,9 @@ function bindEvents() {
       if (state.role === "owner") {
         state.token = "";
         localStorage.removeItem("ownerToken");
-        refreshRole();
-        loadAll().then(render);
+        await refreshRole();
+        await loadAll();
+        render();
         toast("已退出登录");
         return;
       }
@@ -209,6 +252,7 @@ function bindEvents() {
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      if (state.view === tab.dataset.view) return;
       state.view = tab.dataset.view;
       render();
     });
@@ -216,6 +260,10 @@ function bindEvents() {
 
   ["search", "categoryFilter", "kindFilter"].forEach((id) => {
     $(id).addEventListener("input", render);
+  });
+  window.addEventListener("resize", () => {
+    state.renderKeys.photos = "";
+    if (state.view === "photos") renderPhotos();
   });
   initCustomSelects();
   $("postUpdatedAtDisplay").addEventListener("click", () => {
@@ -228,8 +276,7 @@ function bindEvents() {
     $("datetimePopover").hidden = true;
   });
 
-  $("loginBtn").addEventListener("click", async (event) => {
-    event.preventDefault();
+  async function doLogin() {
     try {
       const data = await api("/api/auth/login", {
         method: "POST",
@@ -246,27 +293,55 @@ function bindEvents() {
     } catch (error) {
       toast(error.message);
     }
+  }
+
+  $("password").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      doLogin();
+    }
   });
 
   $("newPostBtn").addEventListener("click", () => openPostDialog());
-  $("savePostBtn").addEventListener("click", savePost);
   $("deletePostBtn").addEventListener("click", deletePost);
   $("generateTitleBtn").addEventListener("click", generateTitle);
+
+  ["postTitle", "postBody", "postCategory", "postTags"].forEach((id) => {
+    $(id).addEventListener("input", debouncedSavePost);
+  });
+  $("postKind").addEventListener("change", debouncedSavePost);
+  $("postStatus").addEventListener("change", debouncedSavePost);
+  $("postUpdatedAt").addEventListener("change", debouncedSavePost);
+  $("postDialog").addEventListener("close", () => savePost(true));
   $("closePostViewBtn").addEventListener("click", () => $("postViewDialog").close());
+
+  // Click backdrop to close dialogs
+  ["postViewDialog", "postDialog", "photoDialog", "pickerDialog", "photoPreviewDialog", "renameSessionDialog"].forEach((id) => {
+    $(id).addEventListener("click", (e) => {
+      if (e.target === $(id)) $(id).close();
+    });
+  });
   $("editFromViewBtn").addEventListener("click", () => {
     const post = state.posts.find((item) => item.id === state.viewingPostId);
     $("postViewDialog").close();
     openPostDialog(post);
   });
   $("newPhotoBtn").addEventListener("click", () => openPhotoDialog());
-  $("savePhotoBtn").addEventListener("click", savePhoto);
   $("deletePhotoBtn").addEventListener("click", deletePhoto);
-  $("closePhotoPreviewBtn").addEventListener("click", () => $("photoPreviewDialog").close());
-  $("runAnalyzeBtn").addEventListener("click", runAnalyze);
-  $("sendChatBtn").addEventListener("click", () => {
-    state.pendingChatFreeText = $("chatFreeText").value.trim();
-    $("chatFreeText").value = "";
+
+  ["photoTitle", "photoCategory", "photoTags", "photoDescription"].forEach((id) => {
+    $(id).addEventListener("input", debouncedSavePhoto);
   });
+  $("photoFile").addEventListener("change", debouncedSavePhoto);
+  $("photoDialog").addEventListener("close", () => savePhoto(true));
+  $("closePhotoPreviewBtn").addEventListener("click", () => $("photoPreviewDialog").close());
+  $("photoPreviewDialog").addEventListener("close", () => {
+    state.photoPreviewLoadId += 1;
+    hidePhotoPreviewBackdrop();
+    $("photoPreviewDialog").classList.remove("loading");
+    $("previewPhotoImage").removeAttribute("src");
+  });
+  $("runAnalyzeBtn").addEventListener("click", runAnalyze);
   $("chatForm").addEventListener("submit", sendChatMessage);
   $("chatInput").addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -274,10 +349,23 @@ function bindEvents() {
     $("chatForm").requestSubmit();
   });
   $("clearChatBtn").addEventListener("click", () => {
+    state.currentChatSessionId = null;
     state.chatMessages = [];
+    state.chatContext = { postIds: [], photoIds: [], freeText: "" };
+    state.sentChatContext = { postIds: [], photoIds: [], freeText: "" };
+    state.chatting = false;
+    $("chatFreeText").value = "";
+    $("chatSessionSelect").value = "";
+    syncCustomSelect("chatSessionSelect");
+    syncChatSessionActions();
+    restorePickerChecks("chatPosts", []);
+    restorePickerChecks("chatPhotos", []);
     renderChatMessages();
+    renderChatContextSummary();
   });
   $("newChatBtn").addEventListener("click", newChatSession);
+  $("renameSessionBtn").addEventListener("click", openRenameChatSessionDialog);
+  $("renameSessionForm").addEventListener("submit", renameChatSession);
   $("deleteSessionBtn").addEventListener("click", deleteChatSession);
   $("chatSessionSelect").addEventListener("change", (e) => {
     const id = e.target.value ? Number(e.target.value) : null;
@@ -311,8 +399,7 @@ function bindEvents() {
     if (event.target.matches("input")) return;
     openPickerDialog("photos", "chat");
   });
-  $("closePickerBtn").addEventListener("click", () => $("pickerDialog").close());
-  $("applyPickerBtn").addEventListener("click", applyPickerSelection);
+  $("pickerDialog").addEventListener("close", applyPickerSelection);
   $("modelPreset").addEventListener("change", () => {
     if ($("modelPreset").value !== "custom") {
       $("model").value = $("modelPreset").value;
@@ -358,12 +445,98 @@ function syncConfigPanel() {
 function render() {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.view === state.view);
+    tab.setAttribute("aria-current", tab.dataset.view === state.view ? "page" : "false");
   });
+  syncViewShell();
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
   $(`${state.view}View`).classList.add("active");
-  renderPosts();
-  renderPhotos();
-  renderPhotoMap();
+  renderActiveView();
+}
+
+function renderActiveView() {
+  syncSidebarPlacement();
+
+  if (state.view === "posts") {
+    const key = viewRenderKey("posts", state.posts);
+    if (state.renderKeys.posts !== key) {
+      renderPosts();
+      state.renderKeys.posts = key;
+    }
+    return;
+  }
+
+  if (state.view === "photos") {
+    const key = viewRenderKey("photos", state.photos);
+    if (state.renderKeys.photos !== key) {
+      renderPhotos();
+      state.renderKeys.photos = key;
+    }
+    return;
+  }
+
+  if (state.view === "map") {
+    const key = viewRenderKey("map", state.photos);
+    if (state.renderKeys.map !== key) {
+      requestAnimationFrame(() => {
+        renderPhotoMap();
+        state.renderKeys.map = key;
+      });
+    }
+  }
+}
+
+function viewRenderKey(view, items) {
+  return [
+    view,
+    $("search").value.trim(),
+    $("categoryFilter").value,
+    view === "posts" ? $("kindFilter").value : "",
+    items.map((item) => `${item.id}:${item.updated_at}`).join("|"),
+  ].join("::");
+}
+
+function restoreSidebarToWorkspace() {
+  const sidebar = document.querySelector(".sidebar");
+  const workspace = document.querySelector(".workspace");
+  if (sidebar && workspace && sidebar.parentElement !== workspace) {
+    workspace.prepend(sidebar);
+  }
+}
+
+function syncSidebarPlacement() {
+  const sidebar = document.querySelector(".sidebar");
+  if (!sidebar) return;
+
+  if (state.view === "posts") {
+    const postList = $("postList");
+    if (postList && sidebar.parentElement !== postList) {
+      postList.prepend(sidebar);
+    }
+    return;
+  }
+
+  if (state.view === "photos") {
+    const firstColumn = $("photoList")?.querySelector(".photo-masonry-column");
+    if (firstColumn && sidebar.parentElement !== firstColumn) {
+      firstColumn.prepend(sidebar);
+      return;
+    }
+  }
+
+  restoreSidebarToWorkspace();
+}
+
+function syncViewShell() {
+  document.body.dataset.view = state.view;
+  const placeholders = {
+    posts: "标题、正文、标签",
+    photos: "照片标题、说明、标签",
+    map: "照片标题、说明、标签",
+    chat: "搜索上下文内容",
+    analyze: "搜索待分析内容",
+  };
+  const searchInput = $("search");
+  if (searchInput) searchInput.placeholder = placeholders[state.view] || "标题、正文、标签";
 }
 
 function filteredPosts() {
@@ -380,18 +553,30 @@ function filteredPosts() {
 
 function renderPosts() {
   const posts = filteredPosts();
-  $("postList").innerHTML = posts.length
+  const sidebar = document.querySelector(".sidebar");
+  const postList = $("postList");
+  const workspace = document.querySelector(".workspace");
+
+  if (sidebar && workspace && postList) {
+    if (state.view === "posts") {
+      if (sidebar.parentElement !== postList) postList.prepend(sidebar);
+    } else if (sidebar.parentElement === postList) {
+      workspace.appendChild(sidebar);
+    }
+  }
+
+  const cardsHtml = posts.length
     ? posts.map((post) => `
       <article class="post-card" data-view-post="${post.id}" tabindex="0">
         <div class="post-head">
           <div>
             <h2 class="post-title">${escapeHtml(post.title)}</h2>
             <div class="meta">
-              <span class="pill">${kindName(post.kind)}</span>
-              <span class="pill">${statusName(post.status)}</span>
-              ${post.category ? `<span>${escapeHtml(post.category)}</span>` : ""}
-              ${post.tags ? `<span>${escapeHtml(post.tags)}</span>` : ""}
-              <span>${new Date(post.updated_at).toLocaleString()}</span>
+              <span class="pill pill-kind">${kindName(post.kind)}</span>
+              <span class="pill pill-status ${statusPillClass(post.status)}">${statusName(post.status)}</span>
+              ${post.category ? `<span class="pill pill-category">${escapeHtml(post.category)}</span>` : ""}
+              ${post.tags ? `<span class="pill pill-tags">${escapeHtml(post.tags)}</span>` : ""}
+              <span class="meta-date">${formatDateTimeText(post.updated_at)}</span>
             </div>
           </div>
           <div class="post-actions">
@@ -403,6 +588,15 @@ function renderPosts() {
       </article>
     `).join("")
     : `<div class="empty">还没有可浏览的文字</div>`;
+
+  if (state.view === "posts" && sidebar && sidebar.parentElement === postList) {
+    Array.from(postList.children).forEach((child) => {
+      if (child !== sidebar) child.remove();
+    });
+    postList.insertAdjacentHTML("beforeend", cardsHtml);
+  } else {
+    postList.innerHTML = cardsHtml;
+  }
 
   document.querySelectorAll("[data-view-post]").forEach((card) => {
     card.addEventListener("click", () => {
@@ -439,11 +633,11 @@ function openPostView(post) {
   state.viewingPostId = post.id;
   $("viewPostTitle").textContent = post.title;
   $("viewPostMeta").innerHTML = `
-    <span class="pill">${kindName(post.kind)}</span>
-    <span class="pill">${statusName(post.status)}</span>
-    ${post.category ? `<span>${escapeHtml(post.category)}</span>` : ""}
-    ${post.tags ? `<span>${escapeHtml(post.tags)}</span>` : ""}
-    <span>${new Date(post.updated_at).toLocaleString()}</span>
+    <span class="pill pill-kind">${kindName(post.kind)}</span>
+    <span class="pill pill-status ${statusPillClass(post.status)}">${statusName(post.status)}</span>
+    ${post.category ? `<span class="pill pill-category">${escapeHtml(post.category)}</span>` : ""}
+    ${post.tags ? `<span class="pill pill-tags">${escapeHtml(post.tags)}</span>` : ""}
+    <span>${formatDateTimeText(post.updated_at)}</span>
   `;
   $("viewPostBody").textContent = post.body;
   $("postViewDialog").showModal();
@@ -456,32 +650,66 @@ function renderPhotos() {
     const haystack = `${photo.title} ${photo.description} ${photo.category} ${photo.tags}`;
     return (!query || matches(haystack, query)) && (!category || photo.category === category);
   });
-  $("photoList").innerHTML = photos.length
-    ? photos.map((photo) => `
-      <article class="photo-card">
-        <div class="photo-frame">
-          <img src="${photo.url}" alt="${escapeHtml(photo.title || photo.original_name)}" />
-          <div class="photo-actions">
-            <button data-preview-photo="${photo.id}" title="预览" aria-label="预览">⌕</button>
-            <a class="button-link" href="${photo.url}" download="${escapeHtml(photo.original_name || photo.filename)}" title="下载" aria-label="下载">↓</a>
-            ${state.role === "owner" ? `<button data-edit-photo="${photo.id}" title="编辑" aria-label="编辑">✎</button>` : ""}
-          </div>
-        </div>
-        <div class="photo-info">
-          <h3>${escapeHtml(photo.title || photo.original_name)}</h3>
-          <div class="meta">
-            ${photo.category ? `<span>${escapeHtml(photo.category)}</span>` : ""}
-            ${photo.tags ? `<span>${escapeHtml(photo.tags)}</span>` : ""}
-          </div>
-          <p>${escapeHtml(photo.description)}</p>
-        </div>
-      </article>
-    `).join("")
-    : `<div class="empty">还没有照片</div>`;
+
+  const sidebar = document.querySelector(".sidebar");
+  const photoList = $("photoList");
+
+  if (!photos.length) {
+    if (state.view === "photos" && sidebar) {
+      const workspace = document.querySelector(".workspace");
+      if (workspace && sidebar.parentElement !== workspace) workspace.prepend(sidebar);
+    }
+    $("photoList").innerHTML = `<div class="empty">还没有照片</div>`;
+    return;
+  }
+
+  const columnCount = photoMasonryColumnCount();
+  photoList.style.setProperty("--photo-columns", String(columnCount));
+  const columns = Array.from({ length: columnCount }, () => []);
+  photos.forEach((photo, index) => {
+    columns[index % columns.length].push(photo);
+  });
+
+  if (sidebar && sidebar.closest("#photoList")) {
+    const workspace = document.querySelector(".workspace");
+    if (workspace) workspace.appendChild(sidebar);
+  }
+
+  photoList.innerHTML = columns.map((items) => `
+    <div class="photo-masonry-column">
+      ${items.map(renderPhotoCard).join("")}
+    </div>
+  `).join("");
+
+  if (state.view === "photos" && sidebar) {
+    const firstColumn = photoList.querySelector(".photo-masonry-column");
+    if (firstColumn && sidebar.parentElement !== firstColumn) {
+      firstColumn.prepend(sidebar);
+    }
+  }
 
   document.querySelectorAll("[data-preview-photo]").forEach((button) => {
-    button.addEventListener("click", () => {
+    const preview = () => {
       const photo = state.photos.find((item) => item.id === Number(button.dataset.previewPhoto));
+      openPhotoPreview(photo);
+    };
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      preview();
+    });
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (event.detail !== 0) return;
+      preview();
+    });
+  });
+
+  document.querySelectorAll("[data-preview-photo-frame]").forEach((frame) => {
+    frame.addEventListener("pointerdown", (event) => {
+      if (event.target.closest(".photo-actions")) return;
+      event.preventDefault();
+      const photo = state.photos.find((item) => item.id === Number(frame.dataset.previewPhotoFrame));
       openPhotoPreview(photo);
     });
   });
@@ -494,21 +722,66 @@ function renderPhotos() {
   });
 }
 
+function renderPhotoCard(photo) {
+  return `
+    <article class="photo-card">
+      <div class="photo-frame" data-preview-photo-frame="${photo.id}">
+        <img src="${photoThumbnailUrl(photo)}" alt="${escapeHtml(photo.title || photo.original_name)}" loading="lazy" decoding="async" fetchpriority="low" />
+        <div class="photo-actions">
+          <button data-preview-photo="${photo.id}" title="预览" aria-label="预览">⤢</button>
+          <a class="button-link" href="${photo.url}" download="${escapeHtml(photo.original_name || photo.filename)}" title="下载" aria-label="下载">↓</a>
+          ${state.role === "owner" ? `<button data-edit-photo="${photo.id}" title="编辑" aria-label="编辑">✎</button>` : ""}
+        </div>
+        <div class="photo-info">
+          <h3>${escapeHtml(photo.title || photo.original_name)}</h3>
+          <div class="meta">
+            ${photo.category ? `<span>${escapeHtml(photo.category)}</span>` : ""}
+            ${photo.tags ? `<span>${escapeHtml(photo.tags)}</span>` : ""}
+          </div>
+          <p>${escapeHtml(photo.description)}</p>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
 function openPhotoPreview(photo) {
   if (!photo) return;
   const title = photo.title || photo.original_name;
+  const dialog = $("photoPreviewDialog");
+  const image = $("previewPhotoImage");
+  const loadId = ++state.photoPreviewLoadId;
   $("previewPhotoTitle").textContent = title;
   $("previewPhotoMeta").innerHTML = `
     ${photo.category ? `<span class="pill">${escapeHtml(photo.category)}</span>` : ""}
     ${photo.tags ? `<span>${escapeHtml(photo.tags)}</span>` : ""}
-    <span>${new Date(photo.updated_at).toLocaleString()}</span>
+    <span>${formatDateTimeText(photo.updated_at)}</span>
   `;
-  $("previewPhotoImage").src = photo.url;
-  $("previewPhotoImage").alt = title;
+  image.onload = null;
+  image.onerror = null;
+  image.src = "";
+  image.removeAttribute("src");
+  image.alt = title;
   $("previewPhotoDescription").textContent = photo.description || "";
   $("downloadPhotoLink").href = photo.url;
   $("downloadPhotoLink").download = photo.original_name || photo.filename || title;
-  $("photoPreviewDialog").showModal();
+  dialog.classList.add("loading");
+  showPhotoPreviewBackdrop();
+  setTimeout(() => {
+    if (loadId !== state.photoPreviewLoadId) return;
+    if (!dialog.open) dialog.showModal();
+    setTimeout(() => {
+      if (loadId !== state.photoPreviewLoadId || !dialog.open) return;
+      image.onload = () => {
+        if (loadId === state.photoPreviewLoadId) dialog.classList.remove("loading");
+      };
+      image.onerror = () => {
+        if (loadId === state.photoPreviewLoadId) dialog.classList.remove("loading");
+      };
+      image.decoding = "async";
+      image.src = photo.url;
+    }, 80);
+  }, 30);
 }
 
 function filteredPhotos() {
@@ -548,7 +821,7 @@ function renderPhotoMap() {
     const marker = L.marker([photo.latitude, photo.longitude]).addTo(state.map);
     marker.bindPopup(`
       <div class="map-popup">
-        <img src="${photo.url}" alt="${escapeHtml(photo.title || photo.original_name)}" />
+        <img src="${photoThumbnailUrl(photo)}" alt="${escapeHtml(photo.title || photo.original_name)}" loading="lazy" decoding="async" fetchpriority="low" />
         <strong>${escapeHtml(photo.title || photo.original_name)}</strong>
         ${photo.description ? `<p>${escapeHtml(photo.description)}</p>` : ""}
       </div>
@@ -571,7 +844,7 @@ function mapPhotoList(photos) {
   return photos.length
     ? `<div class="map-photo-list">${photos.map((photo) => `
         <article>
-          <img src="${photo.url}" alt="${escapeHtml(photo.title || photo.original_name)}" />
+          <img src="${photoThumbnailUrl(photo)}" alt="${escapeHtml(photo.title || photo.original_name)}" loading="lazy" decoding="async" fetchpriority="low" />
           <span>${escapeHtml(photo.title || photo.original_name)}</span>
         </article>
       `).join("")}</div>`
@@ -593,7 +866,7 @@ function renderPostPicker(containerId) {
   $(containerId).innerHTML = state.posts.map((post) => `
     <label class="check-item">
       <input type="checkbox" value="${post.id}" data-picker-source="posts" />
-      <span>${escapeHtml(post.title)} · ${kindName(post.kind)}</span>
+      <span>${kindName(post.kind)} · ${escapeHtml(post.title)}</span>
     </label>
   `).join("") || `<div class="empty compact">暂无文字</div>`;
 }
@@ -602,6 +875,7 @@ function renderPhotoPicker(containerId) {
   $(containerId).innerHTML = state.photos.map((photo) => `
     <label class="check-item">
       <input type="checkbox" value="${photo.id}" data-picker-source="photos" />
+      <img src="${photoThumbnailUrl(photo)}" alt="" class="check-thumb" loading="lazy" decoding="async" fetchpriority="low" />
       <span>${escapeHtml(photo.title || photo.original_name)}</span>
     </label>
   `).join("") || `<div class="empty compact">暂无照片</div>`;
@@ -624,15 +898,15 @@ function openPickerDialog(mode, target = "analysis") {
   state.pickerTarget = target;
   const items = mode === "photos" ? state.photos : state.posts;
   const selected = new Set(selectedPickerIds(mode, target));
-  $("pickerDialogTitle").textContent = mode === "photos" ? "选择照片" : "选择文字";
   $("pickerDialogList").innerHTML = items.length
     ? items.map((item) => {
       const label = mode === "photos"
         ? `${item.title || item.original_name}${item.category ? ` · ${item.category}` : ""}`
-        : `${item.title} · ${kindName(item.kind)}${item.category ? ` · ${item.category}` : ""}`;
+        : `${kindName(item.kind)} · ${item.title}${item.category ? ` · ${item.category}` : ""}`;
       return `
         <label class="large-check-item">
           <input type="checkbox" value="${item.id}" ${selected.has(item.id) ? "checked" : ""} />
+          ${mode === "photos" ? `<img src="${photoThumbnailUrl(item)}" alt="" class="check-thumb-large" loading="lazy" decoding="async" fetchpriority="low" />` : ""}
           <span>${escapeHtml(label)}</span>
         </label>
       `;
@@ -641,8 +915,7 @@ function openPickerDialog(mode, target = "analysis") {
   $("pickerDialog").showModal();
 }
 
-function applyPickerSelection(event) {
-  event.preventDefault();
+function applyPickerSelection() {
   const selected = new Set([...$("pickerDialogList").querySelectorAll("input:checked")].map((item) => item.value));
   const compact = pickerContainer(state.pickerMode, state.pickerTarget);
   compact.querySelectorAll("input").forEach((input) => {
@@ -659,7 +932,7 @@ function renderAnalysisHistory() {
       <div class="history-row">
         <button class="history-item" data-analysis-id="${item.id}">
           <span>${escapeHtml(item.subject || "未命名分析")}</span>
-          <small>${escapeHtml(item.model)} · ${new Date(item.created_at).toLocaleString()}</small>
+          <small>${escapeHtml(item.model)} · ${formatDateTimeText(item.created_at)}</small>
         </button>
         <button class="history-delete danger" data-delete-analysis="${item.id}">删除</button>
       </div>
@@ -692,14 +965,30 @@ function renderAnalysisHistory() {
 }
 
 function renderChatMessages() {
-  $("chatMessages").innerHTML = state.chatMessages.length
-    ? state.chatMessages.map((message) => `
+  let html = "";
+  if (state.chatMessages.length) {
+    html = state.chatMessages.map((message) => `
       <article class="chat-message ${message.role}">
-        <strong>${message.role === "assistant" ? "LLM" : "我"}</strong>
-        <div class="markdown">${renderMarkdown(message.content)}</div>
+        <div class="chat-avatar">${message.role === "assistant" ? "AI" : "我"}</div>
+        <div class="chat-bubble">
+          <div class="markdown">${renderMarkdown(message.content)}</div>
+        </div>
       </article>
-    `).join("")
-    : `<div class="empty compact">选择上下文后开始提问</div>`;
+    `).join("");
+  } else if (!state.chatting) {
+    html = `<div class="empty compact">选择上下文后开始提问</div>`;
+  }
+
+  if (state.chatting) {
+    html += `
+      <article class="chat-message assistant">
+        <div class="chat-avatar">AI</div>
+        <div class="chat-bubble loading">正在输入...</div>
+      </article>
+    `;
+  }
+
+  $("chatMessages").innerHTML = html;
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
 }
 
@@ -743,6 +1032,13 @@ function renderChatSessionSelect() {
     select.value = state.currentChatSessionId;
   }
   syncCustomSelect("chatSessionSelect");
+  syncChatSessionActions();
+}
+
+function syncChatSessionActions() {
+  const hasSession = Boolean(state.currentChatSessionId);
+  $("renameSessionBtn").disabled = !hasSession;
+  $("deleteSessionBtn").disabled = !hasSession;
 }
 
 function openDateTimePicker() {
@@ -871,6 +1167,7 @@ async function switchChatSession(id) {
     restorePickerChecks("chatPosts", state.chatContext.postIds);
     restorePickerChecks("chatPhotos", state.chatContext.photoIds);
     $("chatFreeText").value = state.chatContext.freeText;
+    syncChatSessionActions();
     renderChatMessages();
     renderChatContextSummary();
   } catch (error) {
@@ -890,13 +1187,64 @@ async function newChatSession() {
   state.chatMessages = [];
   state.chatContext = { postIds: [], photoIds: [], freeText: "" };
   state.sentChatContext = { postIds: [], photoIds: [], freeText: "" };
+  state.chatting = false;
   $("chatFreeText").value = "";
   $("chatSessionSelect").value = "";
   syncCustomSelect("chatSessionSelect");
+  syncChatSessionActions();
   restorePickerChecks("chatPosts", []);
   restorePickerChecks("chatPhotos", []);
   renderChatMessages();
   renderChatContextSummary();
+}
+
+function resetChatState() {
+  newChatSession();
+}
+
+function openRenameChatSessionDialog() {
+  if (!state.currentChatSessionId) return;
+  const session = state.chatSessions.find((s) => s.id === state.currentChatSessionId);
+  const currentTitle = session?.title || "新对话";
+  $("renameSessionTitle").value = currentTitle;
+  $("renameSessionDialog").showModal();
+  requestAnimationFrame(() => {
+    $("renameSessionTitle").focus();
+    $("renameSessionTitle").select();
+  });
+}
+
+async function renameChatSession(event) {
+  event.preventDefault();
+  if (!state.currentChatSessionId) return;
+  const session = state.chatSessions.find((s) => s.id === state.currentChatSessionId);
+  const currentTitle = session?.title || "新对话";
+  const title = $("renameSessionTitle").value.trim();
+  if (!title) {
+    toast("会话名不能为空");
+    return;
+  }
+  if (title === currentTitle) {
+    $("renameSessionDialog").close();
+    return;
+  }
+
+  try {
+    const updated = await api(`/api/chat-sessions/${state.currentChatSessionId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (session) {
+      session.title = updated.title;
+      session.updated_at = updated.updated_at;
+    }
+    renderChatSessionSelect();
+    $("renameSessionDialog").close();
+    toast("会话已重命名");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function deleteChatSession() {
@@ -918,7 +1266,8 @@ async function saveChatSession() {
   const contextPhotoIds = JSON.stringify(state.chatContext.photoIds);
   const contextFreeText = state.chatContext.freeText;
   const firstUserMsg = state.chatMessages.find((m) => m.role === "user");
-  const title = firstUserMsg ? firstUserMsg.content.slice(0, 20) : "新对话";
+  const currentSession = state.chatSessions.find((s) => s.id === state.currentChatSessionId);
+  const title = currentSession?.title || (firstUserMsg ? firstUserMsg.content.slice(0, 20) : "新对话");
 
   try {
     if (state.currentChatSessionId) {
@@ -987,8 +1336,6 @@ async function sendChatMessage(event) {
   state.chatContext.freeText = currentFreeText;
 
   state.chatting = true;
-  $("sendChatBtn").disabled = true;
-  $("sendChatBtn").textContent = "发送中";
 
   try {
     const data = await api("/api/chat", {
@@ -1020,13 +1367,11 @@ async function sendChatMessage(event) {
     renderChatMessages();
   } finally {
     state.chatting = false;
-    $("sendChatBtn").disabled = false;
-    $("sendChatBtn").textContent = "发送";
+    renderChatMessages();
   }
 }
 
 function openPostDialog(post = null) {
-  $("postDialogTitle").textContent = post ? "编辑文字" : "新建文字";
   $("postId").value = post?.id || "";
   $("postTitle").value = post?.title || "";
   $("postBody").value = post?.body || "";
@@ -1034,14 +1379,19 @@ function openPostDialog(post = null) {
   $("postStatus").value = post?.status || "draft";
   $("postCategory").value = post?.category || "";
   $("postTags").value = post?.tags || "";
+  syncCustomSelect("postKind");
+  syncCustomSelect("postStatus");
   setPostUpdatedAtValue(post?.updated_at ? new Date(post.updated_at) : new Date());
   $("datetimePopover").hidden = true;
-  $("deletePostBtn").style.visibility = post ? "visible" : "hidden";
+  $("deletePostBtn").style.display = post ? "" : "none";
   $("postDialog").showModal();
 }
 
-async function savePost(event) {
-  event.preventDefault();
+async function savePost(closeAfter = true) {
+  const title = $("postTitle").value.trim();
+  const body = $("postBody").value.trim();
+  if (!title && !body) return;
+
   const id = $("postId").value;
   const dt = $("postUpdatedAt").value;
   const payload = {
@@ -1054,19 +1404,30 @@ async function savePost(event) {
     updated_at: dt ? dt + ":00" : undefined,
   };
   try {
-    await api(id ? `/api/posts/${id}` : "/api/posts", {
+    const result = await api(id ? `/api/posts/${id}` : "/api/posts", {
       method: id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    $("postDialog").close();
+    if (!id && result?.id) {
+      $("postId").value = result.id;
+    }
+    if (closeAfter) $("postDialog").close();
     await loadAll();
     render();
-    toast("已保存");
+    if (closeAfter) toast("已保存");
   } catch (error) {
     toast(error.message);
   }
 }
+
+const debouncedSavePost = (() => {
+  let timer;
+  return () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => savePost(false), 800);
+  };
+})();
 
 async function generateTitle(event) {
   event.preventDefault();
@@ -1129,7 +1490,6 @@ async function deletePost(event) {
 }
 
 function openPhotoDialog(photo = null) {
-  $("photoDialogTitle").textContent = photo ? "编辑照片" : "上传照片";
   $("photoId").value = photo?.id || "";
   $("photoTitle").value = photo?.title || "";
   $("photoCategory").value = photo?.category || "";
@@ -1141,8 +1501,7 @@ function openPhotoDialog(photo = null) {
   $("photoDialog").showModal();
 }
 
-async function savePhoto(event) {
-  event.preventDefault();
+async function savePhoto(closeAfter = true) {
   const id = $("photoId").value;
   try {
     if (id) {
@@ -1158,7 +1517,7 @@ async function savePhoto(event) {
       });
     } else {
       const file = $("photoFile").files[0];
-      if (!file) throw new Error("请选择图片");
+      if (!file) return;
       const form = new FormData();
       form.append("file", file);
       form.append("title", $("photoTitle").value);
@@ -1167,14 +1526,22 @@ async function savePhoto(event) {
       form.append("description", $("photoDescription").value);
       await api("/api/photos", { method: "POST", body: form });
     }
-    $("photoDialog").close();
+    if (closeAfter) $("photoDialog").close();
     await loadAll();
     render();
-    toast("已保存");
+    if (closeAfter) toast("已保存");
   } catch (error) {
     toast(error.message);
   }
 }
+
+const debouncedSavePhoto = (() => {
+  let timer;
+  return () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => savePhoto(false), 800);
+  };
+})();
 
 async function deletePhoto(event) {
   event.preventDefault();
