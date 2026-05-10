@@ -10,9 +10,15 @@ Install the Tauri CLI once:
 cargo install tauri-cli --version "^2"
 ```
 
-## macOS DMG
+## macOS DMG (local)
 
-Run on macOS:
+Run the helper script:
+
+```bash
+./scripts/build-dmg.sh
+```
+
+Or manually:
 
 ```bash
 cd src-tauri
@@ -25,20 +31,18 @@ The installer is written to:
 src-tauri/target/release/bundle/dmg/
 ```
 
-## Windows EXE
+## Windows EXE (local)
 
-Run on Windows:
+Tauri does not reliably cross-compile Windows installers from macOS.
+Build the NSIS `.exe` on a Windows machine or use GitHub Actions (see below).
 
-```powershell
-cd src-tauri
-cargo tauri build --bundles nsis
-```
+## GitHub Actions
 
-The installer `.exe` is written to:
+Push to `main` or trigger manually via **Actions > Build > Run workflow**.
 
-```text
-src-tauri\target\release\bundle\nsis\
-```
+Two jobs run in parallel:
 
-Tauri does not reliably cross-compile Windows installers from macOS. Build the
-NSIS `.exe` on a Windows machine or in Windows CI.
+- `build-macos` on `macos-latest` → uploads `.dmg`
+- `build-windows` on `windows-latest` → uploads `.exe`
+
+Download artifacts from the workflow run page.

@@ -872,7 +872,7 @@ body:not([data-view="posts"]) .kind-field {
   display: flex;
   flex-direction: column;
   justify-content: start;
-  gap: 10px;
+  gap: 6px;
   overflow: hidden;
   cursor: pointer;
 }
@@ -883,7 +883,6 @@ body:not([data-view="posts"]) .kind-field {
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  padding-bottom: 10px;
 }
 
 .post-title {
