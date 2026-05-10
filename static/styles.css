@@ -410,6 +410,21 @@ body[data-view="photos"] #newPhotoBtn .btn-label {
   position: relative;
 }
 
+.datetime-row {
+  display: flex;
+  gap: 10px;
+}
+
+.datetime-row .datetime-display {
+  flex: 1;
+  min-width: 0;
+}
+
+.datetime-row #deletePostBtn {
+  min-height: var(--form-control-height, 48px);
+  padding: 0 18px;
+}
+
 .dialog-body {
   --form-control-height: 48px;
   --form-control-radius: 14px;
@@ -852,8 +867,8 @@ body:not([data-view="posts"]) .kind-field {
 }
 
 .post-card {
-  padding: 16px 18px;
-  min-height: 126px;
+  padding: 16px 18px 24px;
+  min-height: 160px;
   display: flex;
   flex-direction: column;
   justify-content: start;
@@ -868,17 +883,7 @@ body:not([data-view="posts"]) .kind-field {
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-}
-
-.post-actions {
-  display: inline-flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.post-actions button {
-  min-height: 34px;
-  padding: 0 14px;
+  padding-bottom: 10px;
 }
 
 .post-title {
@@ -956,7 +961,7 @@ body:not([data-view="posts"]) .kind-field {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 6;
 }
 
 .photo-grid {
@@ -1871,7 +1876,7 @@ dialog::backdrop {
 }
 
 #postDialog .dialog-body {
-  padding-bottom: 0;
+  padding-bottom: 18px;
   gap: 10px;
   background: var(--paper);
   backdrop-filter: none;
@@ -1879,7 +1884,7 @@ dialog::backdrop {
 }
 
 #postDialog .post-body-field {
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 #photoPreviewDialog {
@@ -2435,7 +2440,7 @@ body.owner .sidebar .owner-only {
 
   .post-card {
     height: auto;
-    min-height: 0;
+    min-height: 160px;
   }
 
   .photo-grid {

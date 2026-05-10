@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQlh8iNY2Kq27jWvMTAqf8t1p3nZ5a8="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/styles.css?v=20260509-photo-thumbs" />
+    <link rel="stylesheet" href="/styles.css?v=20260510" />
   </head>
   <body>
     <svg class="liquid-glass-defs" aria-hidden="true" focusable="false">
@@ -303,7 +303,10 @@
           <div class="field datetime-field">
             <label for="postUpdatedAtDisplay">时间</label>
             <input id="postUpdatedAt" type="hidden" />
-            <button id="postUpdatedAtDisplay" class="datetime-display" type="button"></button>
+            <div class="datetime-row">
+              <button id="postUpdatedAtDisplay" class="datetime-display" type="button"></button>
+              <button id="deletePostBtn" class="danger" value="default">删除</button>
+            </div>
             <div id="datetimePopover" class="ios-datetime-popover" hidden>
               <div class="ios-date-head">
                 <button id="prevPickerMonth" type="button" aria-label="上个月">‹</button>
@@ -325,7 +328,6 @@
           <label for="postBody">内容</label>
           <textarea id="postBody" rows="14" placeholder="内容"></textarea>
         </div>
-        <button id="deletePostBtn" class="danger" value="default">删除</button>
       </form>
     </dialog>
 
@@ -412,6 +414,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/app.js?v=20260509-photo-thumbs"></script>
+    <script src="/app.js?v=20260510"></script>
   </body>
 </html>

@@ -579,10 +579,6 @@ function renderPosts() {
               <span class="meta-date">${formatDateTimeText(post.updated_at)}</span>
             </div>
           </div>
-          <div class="post-actions">
-            <button data-open-post="${post.id}">查看</button>
-            ${state.role === "owner" ? `<button data-edit-post="${post.id}">编辑</button>` : ""}
-          </div>
         </div>
         <div class="body preview">${escapeHtml(post.body)}</div>
       </article>
@@ -611,21 +607,6 @@ function renderPosts() {
     });
   });
 
-  document.querySelectorAll("[data-open-post]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const post = state.posts.find((item) => item.id === Number(button.dataset.openPost));
-      openPostView(post);
-    });
-  });
-
-  document.querySelectorAll("[data-edit-post]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const post = state.posts.find((item) => item.id === Number(button.dataset.editPost));
-      openPostDialog(post);
-    });
-  });
 }
 
 function openPostView(post) {

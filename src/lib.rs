@@ -182,8 +182,8 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
     init_db(&db_path)?;
 
     let owner_password =
-        std::env::var("PERSONAL_SITE_PASSWORD").unwrap_or_else(|_| "change-me".to_string());
-    if owner_password == "change-me" {
+        std::env::var("PERSONAL_SITE_PASSWORD").unwrap_or_else(|_| "123456".to_string());
+    if owner_password == "123456" {
         eprintln!("PERSONAL_SITE_PASSWORD is not set. Temporary owner password: change-me");
     }
 
