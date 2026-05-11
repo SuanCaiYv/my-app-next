@@ -39,7 +39,7 @@ fn main() {
 
             thread::sleep(Duration::from_millis(300));
 
-            WebviewWindowBuilder::new(
+            let mut builder = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::External(APP_URL.parse().expect("valid app url")),
@@ -47,10 +47,15 @@ fn main() {
             .title("")
             .inner_size(1180.0, 780.0)
             .min_inner_size(900.0, 620.0)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true)
-            .devtools(true)
-            .build()?;
+            .devtools(true);
+
+            #[cfg(target_os = "macos")]
+            {
+                builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+                builder = builder.hidden_title(true);
+            }
+
+            builder.build()?;
 
             Ok(())
         })
