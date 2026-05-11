@@ -16,6 +16,7 @@ const state = {
   pendingChatFreeText: null,
   chatSessions: [],
   currentChatSessionId: null,
+  chatUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" },
   dateTimePicker: {
     selected: new Date(),
     visibleMonth: new Date(),
@@ -23,6 +24,11 @@ const state = {
   map: null,
   mapMarkers: [],
   photoPreviewLoadId: 0,
+  photoPreviewScale: 1,
+  photoPreviewPan: { x: 0, y: 0 },
+  photoPreviewDrag: null,
+  photoColumnCount: 0,
+  photoResizeTimer: null,
   renderKeys: {},
 };
 
@@ -44,6 +50,37 @@ function hidePhotoPreviewBackdrop() {
   if (backdrop) backdrop.hidden = true;
 }
 
+function resetDialogPanelState(panel) {
+  if (!panel) return;
+  panel.getAnimations?.().forEach((animation) => animation.cancel());
+  panel.style.willChange = "";
+  panel.style.opacity = "";
+  panel.style.transform = "";
+}
+
+async function closeAnimatedDialog(dialog, panelSelector) {
+  if (!dialog?.open) return;
+  const panel = dialog.querySelector(panelSelector);
+  if (!panel || !panel.animate) {
+    dialog.close();
+    return;
+  }
+  panel.style.willChange = "transform, opacity, border-radius";
+  const animation = panel.animate([
+    { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" },
+    { opacity: 0, transform: "translate3d(0, 18px, 0) scale(0.96)" },
+  ], {
+    duration: 220,
+    easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+    fill: "both",
+  });
+  await animation.finished.catch(() => {});
+  panel.style.willChange = "";
+  if (dialog.open) dialog.close();
+  animation.cancel();
+  resetDialogPanelState(panel);
+}
+
 const api = async (path, options = {}) => {
   const headers = options.headers || {};
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -53,6 +90,19 @@ const api = async (path, options = {}) => {
   if (!response.ok) throw new Error(data.error || "请求失败");
   return data;
 };
+
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    const dialog = $("confirmDialog");
+    $("confirmMessage").textContent = message;
+    const handler = () => {
+      resolve(dialog.returnValue === "ok");
+      dialog.removeEventListener("close", handler);
+    };
+    dialog.addEventListener("close", handler);
+    dialog.showModal();
+  });
+}
 
 function toast(message) {
   $("toast").textContent = message;
@@ -119,13 +169,57 @@ function photoMasonryColumnCount() {
   const photoList = $("photoList");
   if (!photoList || photoList.clientWidth === 0) return 3;
   const containerWidth = photoList.clientWidth;
-  const minColumnWidth = 300;
+  const minColumnWidth = 260;
   const gap = 18;
   return Math.max(1, Math.floor((containerWidth + gap) / (minColumnWidth + gap)));
 }
 
+function schedulePhotoLayoutRender() {
+  if (state.view !== "photos") return;
+  clearTimeout(state.photoResizeTimer);
+  state.photoResizeTimer = setTimeout(() => {
+    const nextColumnCount = photoMasonryColumnCount();
+    if (nextColumnCount === state.photoColumnCount) return;
+    state.renderKeys.photos = "";
+    renderActiveView();
+  }, 120);
+}
+
+function observePhotoGridSize() {
+  const photoList = $("photoList");
+  if (!photoList || !("ResizeObserver" in window)) return;
+  const observer = new ResizeObserver(schedulePhotoLayoutRender);
+  observer.observe(photoList);
+}
+
 function photoThumbnailUrl(photo) {
   return photo.thumbnail_url || photo.url;
+}
+
+function initDragRegion() {
+  if (!window.__TAURI__) return;
+  document.body.classList.add("desktop-app");
+  const tauriWindow = window.__TAURI__.window;
+  const appWindow = tauriWindow?.getCurrentWebviewWindow?.() || tauriWindow?.getCurrentWindow?.();
+  if (!appWindow?.startDragging) return;
+
+  const startDragging = (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest("a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
+
+    const inTopbar = event.target.closest(".topbar");
+    const inWindowChrome = document.body.classList.contains("desktop-app") && event.clientY <= 86;
+    if (!inTopbar && !inWindowChrome) return;
+
+    appWindow.startDragging().catch(() => {});
+  };
+
+  document.addEventListener("mousedown", startDragging);
+  document.addEventListener("dblclick", (event) => {
+    if (event.target.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
+    if (!event.target.closest(".topbar")) return;
+    appWindow.toggleMaximize?.().catch(() => {});
+  });
 }
 
 async function boot() {
@@ -141,6 +235,7 @@ async function boot() {
   await loadAll();
   bindEvents();
   render();
+  initDragRegion();
 }
 
 async function refreshRole() {
@@ -230,7 +325,12 @@ function syncCustomSelect(selectId) {
 function bindEvents() {
   let taps = 0;
   let lastTap = 0;
-  $("brand").addEventListener("click", async () => {
+  $("brand").addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  $("brand").addEventListener("click", async (event) => {
+    event.stopPropagation();
     const now = Date.now();
     taps = now - lastTap > 1200 ? 1 : taps + 1;
     lastTap = now;
@@ -313,11 +413,19 @@ function bindEvents() {
   $("postStatus").addEventListener("change", debouncedSavePost);
   $("postUpdatedAt").addEventListener("change", debouncedSavePost);
   $("postDialog").addEventListener("close", () => savePost(true));
-  $("closePostViewBtn").addEventListener("click", () => $("postViewDialog").close());
+  $("closePostViewBtn").addEventListener("click", () => closePostView());
 
   // Click backdrop to close dialogs
   ["postViewDialog", "postDialog", "photoDialog", "pickerDialog", "photoPreviewDialog", "renameSessionDialog"].forEach((id) => {
     $(id).addEventListener("click", (e) => {
+      if (id === "postViewDialog" && e.target === $(id)) {
+        closePostView();
+        return;
+      }
+      if (id === "photoPreviewDialog" && e.target === $(id)) {
+        closePhotoPreview();
+        return;
+      }
       if (e.target === $(id)) $(id).close();
     });
   });
@@ -333,10 +441,40 @@ function bindEvents() {
     $(id).addEventListener("input", debouncedSavePhoto);
   });
   $("photoFile").addEventListener("change", debouncedSavePhoto);
-  $("photoDialog").addEventListener("close", () => savePhoto(true));
-  $("closePhotoPreviewBtn").addEventListener("click", () => $("photoPreviewDialog").close());
+  state._onPhotoDialogClose = () => {
+    debouncedSavePhoto.cancel();
+    savePhoto(true);
+  };
+  $("photoDialog").addEventListener("close", state._onPhotoDialogClose);
+  $("postViewDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closePostView();
+  });
+  $("closePhotoPreviewBtn").addEventListener("click", () => closePhotoPreview());
+  $("photoZoomInBtn").addEventListener("click", () => setPhotoPreviewScale(state.photoPreviewScale + 0.25));
+  $("photoZoomOutBtn").addEventListener("click", () => setPhotoPreviewScale(state.photoPreviewScale - 0.25));
+  $("photoZoomResetBtn").addEventListener("click", () => setPhotoPreviewScale(1));
+  $("previewPhotoImage").addEventListener("wheel", (event) => {
+    event.preventDefault();
+    setPhotoPreviewScale(state.photoPreviewScale + (event.deltaY < 0 ? 0.16 : -0.16));
+  }, { passive: false });
+  $("previewPhotoImage").addEventListener("pointerdown", startPhotoPreviewPan);
+  $("previewPhotoImage").addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    resetPhotoPreviewTransform();
+  });
+  window.addEventListener("pointermove", movePhotoPreviewPan);
+  window.addEventListener("pointerup", endPhotoPreviewPan);
+  window.addEventListener("pointercancel", endPhotoPreviewPan);
+  $("photoPreviewDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closePhotoPreview();
+  });
   $("photoPreviewDialog").addEventListener("close", () => {
     state.photoPreviewLoadId += 1;
+    state.photoPreviewScale = 1;
+    state.photoPreviewPan = { x: 0, y: 0 };
+    state.photoPreviewDrag = null;
     hidePhotoPreviewBackdrop();
     $("photoPreviewDialog").classList.remove("loading");
     $("previewPhotoImage").removeAttribute("src");
@@ -344,16 +482,19 @@ function bindEvents() {
   $("runAnalyzeBtn").addEventListener("click", runAnalyze);
   $("chatForm").addEventListener("submit", sendChatMessage);
   $("chatInput").addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     $("chatForm").requestSubmit();
   });
+  $("chatInput").addEventListener("input", scheduleTokenMeterRender);
+  $("chatFreeText").addEventListener("input", scheduleTokenMeterRender);
   $("clearChatBtn").addEventListener("click", () => {
     state.currentChatSessionId = null;
     state.chatMessages = [];
     state.chatContext = { postIds: [], photoIds: [], freeText: "" };
     state.sentChatContext = { postIds: [], photoIds: [], freeText: "" };
     state.chatting = false;
+    resetChatUsage();
     $("chatFreeText").value = "";
     $("chatSessionSelect").value = "";
     syncCustomSelect("chatSessionSelect");
@@ -378,10 +519,14 @@ function bindEvents() {
   ["apiKey", "baseUrl", "model"].forEach((id) => {
     $(id).addEventListener("input", persistLlmSettings);
   });
+  $("model").addEventListener("input", scheduleTokenMeterRender);
   document.querySelectorAll("[data-open-picker]").forEach((button) => {
     button.addEventListener("click", () =>
       openPickerDialog(button.dataset.openPicker, button.dataset.pickerTarget || "analysis")
     );
+  });
+  document.querySelectorAll("[data-chat-select-all]").forEach((button) => {
+    button.addEventListener("click", () => toggleChatContextSelection(button.dataset.chatSelectAll));
   });
   $("analysisPosts").addEventListener("click", (event) => {
     if (event.target.matches("input")) return;
@@ -392,11 +537,19 @@ function bindEvents() {
     openPickerDialog("photos", "analysis");
   });
   $("chatPosts").addEventListener("click", (event) => {
-    if (event.target.matches("input")) return;
+    if (event.target.matches("input")) {
+      updateChatSelectAllButtons();
+      renderTokenMeter();
+      return;
+    }
     openPickerDialog("posts", "chat");
   });
   $("chatPhotos").addEventListener("click", (event) => {
-    if (event.target.matches("input")) return;
+    if (event.target.matches("input")) {
+      updateChatSelectAllButtons();
+      renderTokenMeter();
+      return;
+    }
     openPickerDialog("photos", "chat");
   });
   $("pickerDialog").addEventListener("close", applyPickerSelection);
@@ -406,12 +559,15 @@ function bindEvents() {
     }
     persistLlmSettings();
     syncModelField();
+    renderTokenMeter();
   });
   $("toggleConfigBtn").addEventListener("click", () => {
     const collapsed = !$("llmConfigBody").hidden;
     localStorage.setItem("llmConfigCollapsed", collapsed ? "1" : "0");
     syncConfigPanel();
   });
+  observePhotoGridSize();
+  window.addEventListener("resize", schedulePhotoLayoutRender);
 }
 
 function syncModelField() {
@@ -420,6 +576,67 @@ function syncModelField() {
 
 function currentModel() {
   return $("modelPreset").value === "custom" ? $("model").value : $("modelPreset").value;
+}
+
+const MODEL_CONTEXT_LIMITS = {
+  "gpt-4.1": 1_000_000,
+  "gpt-4.1-mini": 1_000_000,
+  "gpt-4o": 128_000,
+  "gpt-4o-mini": 128_000,
+  "deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-pro": 1_000_000,
+  "deepseek-v4": 1_000_000,
+  "deepseek-chat": 128_000,
+  "deepseek-reasoner": 64_000,
+  "qwen-plus": 131_072,
+};
+const DEFAULT_CONTEXT_LIMIT = 128_000;
+const IMAGE_TOKEN_ESTIMATE = 1500;
+const SYSTEM_PROMPT_TOKEN_ESTIMATE = 60;
+
+function contextLimitForModel(name) {
+  if (!name) return DEFAULT_CONTEXT_LIMIT;
+  const key = name.trim().toLowerCase();
+  if (MODEL_CONTEXT_LIMITS[key]) return MODEL_CONTEXT_LIMITS[key];
+  for (const [prefix, limit] of Object.entries(MODEL_CONTEXT_LIMITS)) {
+    if (key.startsWith(prefix)) return limit;
+  }
+  return DEFAULT_CONTEXT_LIMIT;
+}
+
+function estimateTextTokens(text) {
+  if (!text) return 0;
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x3040 && code <= 0x309f) ||
+      (code >= 0x30a0 && code <= 0x30ff) ||
+      (code >= 0xac00 && code <= 0xd7af) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk++;
+    } else {
+      other++;
+    }
+  }
+  return Math.ceil(cjk + other / 4);
+}
+
+function formatTokenCount(n) {
+  if (!Number.isFinite(n) || n < 0) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 2)}M`;
+  if (n >= 10_000) return `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return n.toLocaleString("en-US");
+}
+
+function tokenMeterState(ratio) {
+  if (ratio >= 0.85) return "danger";
+  if (ratio >= 0.6) return "warn";
+  return "safe";
 }
 
 function persistLlmSettings() {
@@ -621,7 +838,13 @@ function openPostView(post) {
     <span>${formatDateTimeText(post.updated_at)}</span>
   `;
   $("viewPostBody").textContent = post.body;
-  $("postViewDialog").showModal();
+  const dialog = $("postViewDialog");
+  resetDialogPanelState(dialog.querySelector(".reader"));
+  dialog.showModal();
+}
+
+function closePostView() {
+  closeAnimatedDialog($("postViewDialog"), ".reader");
 }
 
 function renderPhotos() {
@@ -636,15 +859,20 @@ function renderPhotos() {
   const photoList = $("photoList");
 
   if (!photos.length) {
-    if (state.view === "photos" && sidebar) {
-      const workspace = document.querySelector(".workspace");
-      if (workspace && sidebar.parentElement !== workspace) workspace.prepend(sidebar);
+    if (state.view === "photos" && sidebar && photoList) {
+      if (sidebar.parentElement !== photoList) photoList.prepend(sidebar);
     }
-    $("photoList").innerHTML = `<div class="empty">还没有照片</div>`;
+    Array.from(photoList.children).forEach((child) => {
+      if (child !== sidebar) child.remove();
+    });
+    if (!photoList.querySelector(".empty")) {
+      photoList.insertAdjacentHTML("beforeend", `<div class="empty">还没有照片</div>`);
+    }
     return;
   }
 
   const columnCount = photoMasonryColumnCount();
+  state.photoColumnCount = columnCount;
   photoList.style.setProperty("--photo-columns", String(columnCount));
   const columns = Array.from({ length: columnCount }, () => []);
   photos.forEach((photo, index) => {
@@ -701,11 +929,17 @@ function renderPhotos() {
       openPhotoDialog(photo);
     });
   });
+
+  balancePhotoMasonry();
+  photoList.querySelectorAll(".photo-card img").forEach((image) => {
+    if (image.complete) return;
+    image.addEventListener("load", () => requestAnimationFrame(balancePhotoMasonry), { once: true });
+  });
 }
 
 function renderPhotoCard(photo) {
   return `
-    <article class="photo-card">
+    <article class="photo-card" data-photo-card="${photo.id}">
       <div class="photo-frame" data-preview-photo-frame="${photo.id}">
         <img src="${photoThumbnailUrl(photo)}" alt="${escapeHtml(photo.title || photo.original_name)}" loading="lazy" decoding="async" fetchpriority="low" />
         <div class="photo-actions">
@@ -726,12 +960,51 @@ function renderPhotoCard(photo) {
   `;
 }
 
+function balancePhotoMasonry() {
+  if (state.view !== "photos") return;
+  const photoList = $("photoList");
+  if (!photoList) return;
+  const columns = Array.from(photoList.querySelectorAll(".photo-masonry-column"));
+  if (columns.length <= 1) return;
+
+  const cardsById = new Map(
+    Array.from(photoList.querySelectorAll(".photo-card")).map((card) => [
+      Number(card.dataset.photoCard),
+      card,
+    ])
+  );
+  if (!cardsById.size) return;
+
+  const columnGap = parseFloat(getComputedStyle(photoList).gap) || 18;
+  const cardEntries = state.photos
+    .map((photo) => cardsById.get(photo.id))
+    .filter(Boolean)
+    .map((card) => ({
+      card,
+      height: card.getBoundingClientRect().height,
+    }));
+
+  cardEntries.forEach(({ card }) => card.remove());
+
+  const heights = columns.map((column) => {
+    const sidebar = column.querySelector(".sidebar");
+    return sidebar ? sidebar.getBoundingClientRect().height + columnGap : 0;
+  });
+
+  cardEntries.forEach(({ card, height }) => {
+    const targetIndex = heights.indexOf(Math.min(...heights));
+    columns[targetIndex].appendChild(card);
+    heights[targetIndex] += height + columnGap;
+  });
+}
+
 function openPhotoPreview(photo) {
   if (!photo) return;
   const title = photo.title || photo.original_name;
   const dialog = $("photoPreviewDialog");
   const image = $("previewPhotoImage");
   const loadId = ++state.photoPreviewLoadId;
+  resetPhotoPreviewTransform();
   $("previewPhotoTitle").textContent = title;
   $("previewPhotoMeta").innerHTML = `
     ${photo.category ? `<span class="pill">${escapeHtml(photo.category)}</span>` : ""}
@@ -750,7 +1023,10 @@ function openPhotoPreview(photo) {
   showPhotoPreviewBackdrop();
   setTimeout(() => {
     if (loadId !== state.photoPreviewLoadId) return;
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      resetDialogPanelState(dialog.querySelector(".photo-preview-dialog"));
+      dialog.showModal();
+    }
     setTimeout(() => {
       if (loadId !== state.photoPreviewLoadId || !dialog.open) return;
       image.onload = () => {
@@ -763,6 +1039,80 @@ function openPhotoPreview(photo) {
       image.src = photo.url;
     }, 80);
   }, 30);
+}
+
+function setPhotoPreviewScale(scale) {
+  const nextScale = Math.min(4, Math.max(0.5, Number(scale) || 1));
+  state.photoPreviewScale = nextScale;
+  if (nextScale <= 1) state.photoPreviewPan = { x: 0, y: 0 };
+  applyPhotoPreviewTransform();
+}
+
+function setPhotoPreviewPan(x, y) {
+  if (state.photoPreviewScale <= 1) {
+    state.photoPreviewPan = { x: 0, y: 0 };
+  } else {
+    state.photoPreviewPan = { x, y };
+  }
+  applyPhotoPreviewTransform();
+}
+
+function resetPhotoPreviewTransform() {
+  state.photoPreviewScale = 1;
+  state.photoPreviewPan = { x: 0, y: 0 };
+  applyPhotoPreviewTransform();
+}
+
+function applyPhotoPreviewTransform() {
+  const image = $("previewPhotoImage");
+  if (image) {
+    image.style.setProperty("--preview-scale", String(state.photoPreviewScale));
+    image.style.setProperty("--preview-pan-x", `${state.photoPreviewPan.x}px`);
+    image.style.setProperty("--preview-pan-y", `${state.photoPreviewPan.y}px`);
+    image.classList.toggle("is-zoomed", state.photoPreviewScale > 1);
+  }
+  const label = $("photoZoomResetBtn");
+  if (label) label.textContent = `${Math.round(state.photoPreviewScale * 100)}%`;
+}
+
+function startPhotoPreviewPan(event) {
+  if (state.photoPreviewScale <= 1 || event.button !== 0) return;
+  event.preventDefault();
+  const image = $("previewPhotoImage");
+  image.setPointerCapture?.(event.pointerId);
+  image.classList.add("is-panning");
+  state.photoPreviewDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: state.photoPreviewPan.x,
+    originY: state.photoPreviewPan.y,
+  };
+}
+
+function movePhotoPreviewPan(event) {
+  const drag = state.photoPreviewDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  setPhotoPreviewPan(
+    drag.originX + event.clientX - drag.startX,
+    drag.originY + event.clientY - drag.startY
+  );
+}
+
+function endPhotoPreviewPan(event) {
+  const drag = state.photoPreviewDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  $("previewPhotoImage").classList.remove("is-panning");
+  state.photoPreviewDrag = null;
+}
+
+async function closePhotoPreview() {
+  const dialog = $("photoPreviewDialog");
+  const panel = dialog.querySelector(".photo-preview-dialog");
+  resetPhotoPreviewTransform();
+  await closeAnimatedDialog(dialog, ".photo-preview-dialog");
+  if (panel) panel.style.transform = "";
 }
 
 function filteredPhotos() {
@@ -840,7 +1190,9 @@ function renderAnalysisPickers() {
 function renderChatPickers() {
   renderPostPicker("chatPosts");
   renderPhotoPicker("chatPhotos");
+  updateChatSelectAllButtons();
   renderChatMessages();
+  renderChatContextSummary();
 }
 
 function renderPostPicker(containerId) {
@@ -874,6 +1226,28 @@ function selectedPickerIds(mode, target = "analysis") {
   return [...container.querySelectorAll("input:checked")].map((item) => Number(item.value));
 }
 
+function toggleChatContextSelection(mode) {
+  const container = pickerContainer(mode, "chat");
+  const inputs = [...container.querySelectorAll("input")];
+  if (!inputs.length) return;
+  const shouldSelect = inputs.some((input) => !input.checked);
+  inputs.forEach((input) => {
+    input.checked = shouldSelect;
+  });
+  updateChatSelectAllButtons();
+  renderTokenMeter();
+}
+
+function updateChatSelectAllButtons() {
+  document.querySelectorAll("[data-chat-select-all]").forEach((button) => {
+    const mode = button.dataset.chatSelectAll;
+    const inputs = [...pickerContainer(mode, "chat").querySelectorAll("input")];
+    const allSelected = inputs.length > 0 && inputs.every((input) => input.checked);
+    button.textContent = allSelected ? "清空" : "全选";
+    button.disabled = inputs.length === 0;
+  });
+}
+
 function openPickerDialog(mode, target = "analysis") {
   state.pickerMode = mode;
   state.pickerTarget = target;
@@ -903,6 +1277,9 @@ function applyPickerSelection() {
     input.checked = selected.has(input.value);
   });
   $("pickerDialog").close();
+  if (state.pickerTarget === "chat") {
+    renderTokenMeter();
+  }
 }
 
 function renderAnalysisHistory() {
@@ -932,7 +1309,7 @@ function renderAnalysisHistory() {
 
   document.querySelectorAll("[data-delete-analysis]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (!confirm("确定删除这条分析历史？")) return;
+      if (!await showConfirm("确定删除这条分析历史？")) return;
       try {
         await api(`/api/analyses/${button.dataset.deleteAnalysis}`, { method: "DELETE" });
         state.analyses = state.analyses.filter((item) => item.id !== Number(button.dataset.deleteAnalysis));
@@ -992,6 +1369,100 @@ function renderChatContextSummary() {
   } else {
     el.innerHTML = "";
   }
+  renderTokenMeter();
+}
+
+function collectChatContextSnapshot() {
+  const postIds = new Set(state.chatContext.postIds);
+  const photoIds = new Set(state.chatContext.photoIds);
+  const chatPosts = $("chatPosts");
+  const chatPhotos = $("chatPhotos");
+  if (chatPosts) {
+    chatPosts.querySelectorAll("input:checked").forEach((input) => postIds.add(Number(input.value)));
+  }
+  if (chatPhotos) {
+    chatPhotos.querySelectorAll("input:checked").forEach((input) => photoIds.add(Number(input.value)));
+  }
+  const freeTextEl = $("chatFreeText");
+  const freeText = state.pendingChatFreeText ?? (freeTextEl ? freeTextEl.value : state.chatContext.freeText);
+  return { postIds: [...postIds], photoIds: [...photoIds], freeText };
+}
+
+function estimatePromptTokens(snapshot, draftInput) {
+  let total = SYSTEM_PROMPT_TOKEN_ESTIMATE;
+  if (snapshot.freeText) {
+    total += estimateTextTokens(snapshot.freeText) + 12;
+  }
+  for (const id of snapshot.postIds) {
+    const post = state.posts.find((p) => p.id === id);
+    if (post) {
+      total += estimateTextTokens(post.title) + estimateTextTokens(post.body) + 24;
+    }
+  }
+  total += snapshot.photoIds.length * IMAGE_TOKEN_ESTIMATE;
+  for (const msg of state.chatMessages) {
+    total += estimateTextTokens(msg.content) + 8;
+  }
+  if (draftInput) total += estimateTextTokens(draftInput);
+  return total;
+}
+
+function renderTokenMeter() {
+  const node = $("chatTokenMeter");
+  if (!node) return;
+  const model = currentModel();
+  if (!model) {
+    node.hidden = true;
+    return;
+  }
+
+  const snapshot = collectChatContextSnapshot();
+  const draftInput = $("chatInput") ? $("chatInput").value : "";
+  const estimated = estimatePromptTokens(snapshot, draftInput);
+
+  const confirmed = state.chatUsage.confirmed && state.chatUsage.model === model;
+  const used = confirmed
+    ? Math.max(state.chatUsage.totalTokens, estimated)
+    : estimated;
+  const limit = contextLimitForModel(model);
+  const ratio = limit > 0 ? Math.min(used / limit, 1) : 0;
+  const fillRatio = limit > 0 ? Math.min(used / limit, 1.02) : 0;
+
+  node.hidden = false;
+  node.dataset.state = tokenMeterState(ratio);
+
+  const fill = node.querySelector(".token-meter-fill");
+  if (fill) fill.style.width = `${Math.max(fillRatio * 100, used > 0 ? 1.5 : 0).toFixed(2)}%`;
+
+  node.querySelector(".token-meter-used").textContent = formatTokenCount(used);
+  node.querySelector(".token-meter-limit").textContent = formatTokenCount(limit);
+
+  const percentValue = ratio * 100;
+  let percentText;
+  if (percentValue >= 10) percentText = `${percentValue.toFixed(0)}%`;
+  else if (percentValue >= 1) percentText = `${percentValue.toFixed(1)}%`;
+  else if (percentValue > 0) percentText = `${percentValue.toFixed(2)}%`;
+  else percentText = "0%";
+  node.querySelector(".token-meter-percent").textContent = percentText;
+
+  const sourceEl = node.querySelector(".token-meter-source");
+  if (sourceEl) {
+    sourceEl.dataset.source = confirmed ? "actual" : "estimated";
+    sourceEl.textContent = confirmed ? "实际" : "估算";
+  }
+}
+
+let tokenMeterTimer = null;
+function scheduleTokenMeterRender() {
+  if (tokenMeterTimer) return;
+  tokenMeterTimer = setTimeout(() => {
+    tokenMeterTimer = null;
+    renderTokenMeter();
+  }, 80);
+}
+
+function resetChatUsage() {
+  state.chatUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" };
 }
 
 async function loadChatSessions() {
@@ -1145,6 +1616,7 @@ async function switchChatSession(id) {
       photoIds: [...state.chatContext.photoIds],
       freeText: state.chatContext.freeText,
     };
+    resetChatUsage();
     restorePickerChecks("chatPosts", state.chatContext.postIds);
     restorePickerChecks("chatPhotos", state.chatContext.photoIds);
     $("chatFreeText").value = state.chatContext.freeText;
@@ -1161,6 +1633,9 @@ function restorePickerChecks(containerId, ids) {
   container.querySelectorAll("input").forEach((input) => {
     input.checked = ids.includes(Number(input.value));
   });
+  if (containerId === "chatPosts" || containerId === "chatPhotos") {
+    updateChatSelectAllButtons();
+  }
 }
 
 async function newChatSession() {
@@ -1169,6 +1644,7 @@ async function newChatSession() {
   state.chatContext = { postIds: [], photoIds: [], freeText: "" };
   state.sentChatContext = { postIds: [], photoIds: [], freeText: "" };
   state.chatting = false;
+  resetChatUsage();
   $("chatFreeText").value = "";
   $("chatSessionSelect").value = "";
   syncCustomSelect("chatSessionSelect");
@@ -1230,7 +1706,7 @@ async function renameChatSession(event) {
 
 async function deleteChatSession() {
   if (!state.currentChatSessionId) return;
-  if (!confirm("确定删除这个会话？")) return;
+  if (!await showConfirm("确定删除这个会话？")) return;
   try {
     await api(`/api/chat-sessions/${state.currentChatSessionId}`, { method: "DELETE" });
     state.chatSessions = state.chatSessions.filter((s) => s.id !== state.currentChatSessionId);
@@ -1342,6 +1818,17 @@ async function sendChatMessage(event) {
     await saveChatSession();
     state.chatContext.freeText = "";
     state.sentChatContext.freeText = "";
+    const usage = data.usage || {};
+    const promptTokens = usage.prompt_tokens ?? 0;
+    const completionTokens = usage.completion_tokens ?? 0;
+    const totalTokens = usage.total_tokens ?? (promptTokens + completionTokens);
+    state.chatUsage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      confirmed: true,
+      model,
+    };
     renderChatContextSummary();
   } catch (error) {
     state.chatMessages.push({ role: "assistant", content: error.message });
@@ -1462,7 +1949,7 @@ function cleanTitle(value = "") {
 async function deletePost(event) {
   event.preventDefault();
   const id = $("postId").value;
-  if (!id || !confirm("确定删除这条内容？")) return;
+  if (!id || !await showConfirm("确定删除这条内容？")) return;
   await api(`/api/posts/${id}`, { method: "DELETE" });
   $("postDialog").close();
   await loadAll();
@@ -1505,7 +1992,8 @@ async function savePhoto(closeAfter = true) {
       form.append("category", $("photoCategory").value);
       form.append("tags", $("photoTags").value);
       form.append("description", $("photoDescription").value);
-      await api("/api/photos", { method: "POST", body: form });
+      const result = await api("/api/photos", { method: "POST", body: form });
+      $("photoId").value = result.id;
     }
     if (closeAfter) $("photoDialog").close();
     await loadAll();
@@ -1518,21 +2006,42 @@ async function savePhoto(closeAfter = true) {
 
 const debouncedSavePhoto = (() => {
   let timer;
-  return () => {
+  const fn = () => {
     clearTimeout(timer);
     timer = setTimeout(() => savePhoto(false), 800);
   };
+  fn.cancel = () => clearTimeout(timer);
+  return fn;
 })();
 
 async function deletePhoto(event) {
   event.preventDefault();
   const id = $("photoId").value;
-  if (!id || !confirm("确定删除这张照片？")) return;
-  await api(`/api/photos/${id}`, { method: "DELETE" });
-  $("photoDialog").close();
-  await loadAll();
-  render();
-  toast("已删除");
+  console.log("[deletePhoto] clicked, id:", id);
+  if (!id || !await showConfirm("确定删除这张照片？")) {
+    console.log("[deletePhoto] cancelled, id empty or confirm declined");
+    return;
+  }
+  const handler = state._onPhotoDialogClose;
+  if (handler) $("photoDialog").removeEventListener("close", handler);
+  console.log("[deletePhoto] sending DELETE /api/photos/" + id);
+  try {
+    const result = await api(`/api/photos/${id}`, { method: "DELETE" });
+    console.log("[deletePhoto] DELETE success, result:", result);
+    state.photos = state.photos.filter((p) => String(p.id) !== id);
+    console.log("[deletePhoto] filtered state.photos, new count:", state.photos.length);
+    $("photoId").value = "";
+    $("photoDialog").close();
+    console.log("[deletePhoto] calling render()");
+    render();
+    toast("已删除");
+  } catch (err) {
+    console.error("[deletePhoto] DELETE failed:", err);
+    toast("删除失败: " + err.message);
+  } finally {
+    if (handler) $("photoDialog").addEventListener("close", handler);
+    console.log("[deletePhoto] done");
+  }
 }
 
 async function runAnalyze() {

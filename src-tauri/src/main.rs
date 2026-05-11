@@ -44,9 +44,12 @@ fn main() {
                 "main",
                 WebviewUrl::External(APP_URL.parse().expect("valid app url")),
             )
-            .title("Hello.me")
+            .title("")
             .inner_size(1180.0, 780.0)
             .min_inner_size(900.0, 620.0)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .devtools(true)
             .build()?;
 
             Ok(())

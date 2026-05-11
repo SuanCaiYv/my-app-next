@@ -613,8 +613,8 @@ async fn analyze(
         let post = load_post(&conn, *id)?;
         subject_parts.push(format!("{} · {}", post.title, kind_name_rust(&post.kind)));
         text.push_str(&format!(
-            "\n[{}: {} / {}]\n{}\n",
-            post.kind, post.title, post.category, post.body
+            "\n[{}: {} / {}] ({})\n{}\n",
+            post.kind, post.title, post.category, post.updated_at, post.body
         ));
     }
 
@@ -738,8 +738,8 @@ async fn chat(
     for id in &input.post_ids {
         let post = load_post(&conn, *id)?;
         context_text.push_str(&format!(
-            "\n[{}: {} / {}]\n{}\n",
-            post.kind, post.title, post.category, post.body
+            "\n[{}: {} / {}] ({})\n{}\n",
+            post.kind, post.title, post.category, post.updated_at, post.body
         ));
     }
 
@@ -822,7 +822,8 @@ async fn chat(
     let answer = value["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("没有拿到可读回复");
-    Ok(Json(json!({ "answer": answer })))
+    let usage = value.get("usage").cloned().unwrap_or(Value::Null);
+    Ok(Json(json!({ "answer": answer, "usage": usage })))
 }
 
 async fn list_chat_sessions(

@@ -10,7 +10,8 @@
       integrity="sha256-p4NxAoJBhIINfQlh8iNY2Kq27jWvMTAqf8t1p3nZ5a8="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/styles.css?v=20260510" />
+    <link rel="stylesheet" href="/styles.css?v=20260511d" />
+    <link rel="icon" href="/assets/logo.png" />
   </head>
   <body>
     <svg class="liquid-glass-defs" aria-hidden="true" focusable="false">
@@ -39,14 +40,17 @@
         />
       </filter>
     </svg>
-    <header class="topbar">
-      <button id="brand" class="brand" title="Hello.me">Hello.me</button>
+    <header class="topbar" data-tauri-drag-region>
+      <button id="brand" class="brand" title="Hello.me">
+        <img src="/assets/logo.png" alt="" />
+        <span>Hello.me</span>
+      </button>
       <nav class="tabs" aria-label="主导航">
         <button class="tab active" data-view="posts">文字</button>
         <button class="tab" data-view="photos">照片</button>
         <button class="tab" data-view="map">地图</button>
         <button class="tab owner-only" data-view="chat">对话</button>
-        <button class="tab owner-only" data-view="analyze">LLM 分析</button>
+        <button class="tab owner-only" data-view="analyze">LLM</button>
       </nav>
       <div class="role" id="roleLabel">游客</div>
     </header>
@@ -126,14 +130,20 @@
                 <div class="picker-panel">
                   <div class="picker-head">
                     <h3>选择文字</h3>
-                    <button class="small-button" data-open-picker="posts" data-picker-target="chat">展开</button>
+                    <div class="head-actions">
+                      <button class="small-button" data-chat-select-all="posts" type="button">全选</button>
+                      <button class="small-button" data-open-picker="posts" data-picker-target="chat" type="button">展开</button>
+                    </div>
                   </div>
                   <div id="chatPosts" class="check-list"></div>
                 </div>
                 <div class="picker-panel">
                   <div class="picker-head">
                     <h3>选择照片</h3>
-                    <button class="small-button" data-open-picker="photos" data-picker-target="chat">展开</button>
+                    <div class="head-actions">
+                      <button class="small-button" data-chat-select-all="photos" type="button">全选</button>
+                      <button class="small-button" data-open-picker="photos" data-picker-target="chat" type="button">展开</button>
+                    </div>
                   </div>
                   <div id="chatPhotos" class="check-list"></div>
                 </div>
@@ -160,6 +170,21 @@
               </div>
               <div id="chatMessages" class="chat-messages"></div>
               <div id="chatContextSummary" class="context-summary chat-context-bar"></div>
+              <div id="chatTokenMeter" class="chat-token-meter" data-state="safe" hidden>
+                <div class="token-meter-head">
+                  <span class="token-meter-label">上下文</span>
+                  <span class="token-meter-numbers">
+                    <span class="token-meter-used">0</span>
+                    <span class="token-meter-sep">/</span>
+                    <span class="token-meter-limit">128k</span>
+                  </span>
+                  <span class="token-meter-percent">0%</span>
+                  <span class="token-meter-source" data-source="estimated">估算</span>
+                </div>
+                <div class="token-meter-track">
+                  <div class="token-meter-fill" style="width:0%"></div>
+                </div>
+              </div>
               <form id="chatForm" class="chat-form">
                 <textarea id="chatInput" rows="3" placeholder="基于选中的内容提问"></textarea>
               </form>
@@ -373,7 +398,7 @@
           <textarea id="photoDescription" rows="5"></textarea>
         </div>
         <div class="dialog-actions">
-          <button id="deletePhotoBtn" class="danger" value="default">删除</button>
+          <button id="deletePhotoBtn" class="danger" type="button">删除</button>
         </div>
       </form>
     </dialog>
@@ -385,7 +410,12 @@
             <h2 id="previewPhotoTitle"></h2>
             <div id="previewPhotoMeta" class="meta"></div>
           </div>
-          <button id="closePhotoPreviewBtn" class="dialog-button">关闭</button>
+          <div class="photo-preview-tools">
+            <button id="photoZoomOutBtn" class="dialog-button" type="button" aria-label="缩小">-</button>
+            <button id="photoZoomResetBtn" class="dialog-button" type="button">100%</button>
+            <button id="photoZoomInBtn" class="dialog-button" type="button" aria-label="放大">+</button>
+            <button id="closePhotoPreviewBtn" class="dialog-button" type="button">关闭</button>
+          </div>
         </div>
         <img id="previewPhotoImage" alt="" />
         <p id="previewPhotoDescription"></p>
@@ -408,12 +438,22 @@
       </form>
     </dialog>
 
+    <dialog id="confirmDialog">
+      <form method="dialog" class="dialog-body confirm-dialog">
+        <p id="confirmMessage"></p>
+        <div class="dialog-actions">
+          <button value="cancel">取消</button>
+          <button value="ok" class="danger">确定</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast"></div>
     <script
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/app.js?v=20260510"></script>
+    <script src="/app.js?v=20260511e"></script>
   </body>
 </html>
