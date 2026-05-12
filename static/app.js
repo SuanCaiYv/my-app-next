@@ -486,7 +486,11 @@ function bindEvents() {
     event.preventDefault();
     $("chatForm").requestSubmit();
   });
-  $("chatInput").addEventListener("input", scheduleTokenMeterRender);
+  $("chatInput").addEventListener("input", () => {
+    resizeChatInput();
+    scheduleTokenMeterRender();
+  });
+  resizeChatInput();
   $("chatFreeText").addEventListener("input", scheduleTokenMeterRender);
   $("clearChatBtn").addEventListener("click", () => {
     state.currentChatSessionId = null;
@@ -496,6 +500,8 @@ function bindEvents() {
     state.chatting = false;
     resetChatUsage();
     $("chatFreeText").value = "";
+    $("chatInput").value = "";
+    resizeChatInput();
     $("chatSessionSelect").value = "";
     syncCustomSelect("chatSessionSelect");
     syncChatSessionActions();
@@ -745,6 +751,9 @@ function syncSidebarPlacement() {
 
 function syncViewShell() {
   document.body.dataset.view = state.view;
+  if (state.view === "chat") {
+    window.scrollTo(0, 0);
+  }
   const placeholders = {
     posts: "标题、正文、标签",
     photos: "照片标题、说明、标签",
@@ -1350,6 +1359,16 @@ function renderChatMessages() {
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
 }
 
+function resizeChatInput() {
+  const input = $("chatInput");
+  if (!input) return;
+  input.style.height = "auto";
+  const maxHeight = parseFloat(getComputedStyle(input).maxHeight);
+  const nextHeight = Math.min(input.scrollHeight, Number.isFinite(maxHeight) ? maxHeight : input.scrollHeight);
+  input.style.height = `${nextHeight}px`;
+  input.classList.toggle("chat-input-scroll", input.scrollHeight > nextHeight + 1);
+}
+
 function renderChatContextSummary() {
   const parts = [];
   for (const id of state.chatContext.postIds) {
@@ -1785,6 +1804,7 @@ async function sendChatMessage(event) {
 
   state.chatMessages.push({ role: "user", content });
   $("chatInput").value = "";
+  resizeChatInput();
   $("chatFreeText").value = "";
   renderChatMessages();
 

@@ -132,6 +132,12 @@ html {
   background: #f3f5f1;
 }
 
+html:has(body[data-view="chat"]),
+body[data-view="chat"] {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -410,6 +416,23 @@ body.desktop-app main {
   width: min(calc(100% - 112px), 1360px);
   max-width: none;
   padding: 30px 0 36px;
+}
+
+body[data-view="chat"] main {
+  height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
+body.desktop-app[data-view="chat"] main {
+  height: calc(100vh - 88px);
+  padding-bottom: 0;
+}
+
+body[data-view="chat"] .workspace,
+body[data-view="chat"] #chatView {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .workspace {
@@ -1317,6 +1340,8 @@ body:not([data-view="posts"]) .kind-field {
   display: grid;
   grid-template-columns: minmax(340px, 1fr) minmax(0, 1.5fr);
   gap: 18px;
+  height: 100%;
+  min-height: 0;
 }
 
 .chat-context,
@@ -1338,6 +1363,28 @@ body:not([data-view="posts"]) .kind-field {
   display: grid;
   align-content: start;
   gap: 14px;
+  align-self: start;
+  height: calc(100% - 22px);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-context::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 42%, var(--line));
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(145deg, rgb(255 255 255 / 78%), rgb(255 255 255 / 48%) 48%, rgb(255 255 255 / 66%));
+  backdrop-filter: blur(16px) saturate(1.14);
+  -webkit-backdrop-filter: blur(16px) saturate(1.14);
+  pointer-events: none;
 }
 
 .chat-header {
@@ -1356,14 +1403,27 @@ body:not([data-view="posts"]) .kind-field {
   flex: 0 0 auto;
 }
 
-.chat-context-bar {
+.chat-context-bar,
+.context-summary.chat-context-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   font-size: 13px;
   color: var(--muted);
   padding: 6px 12px;
   min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  white-space: nowrap;
+}
+
+.chat-context-bar .pill,
+.context-summary.chat-context-bar .pill {
+  flex: 0 0 auto;
+  max-width: min(260px, 60vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-context-bar:empty {
@@ -1524,17 +1584,21 @@ body:not([data-view="posts"]) .kind-field {
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(360px, 1fr) auto;
+  grid-template-rows: auto minmax(180px, 1fr) auto auto auto;
   gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .chat-messages {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 360px;
-  max-height: 620px;
+  min-height: 180px;
+  max-height: none;
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
@@ -1614,6 +1678,17 @@ body:not([data-view="posts"]) .kind-field {
 
 .chat-form {
   display: block;
+  min-height: 0;
+}
+
+#chatInput {
+  min-height: 76px;
+  max-height: min(148px, 18vh);
+  overflow-y: hidden;
+}
+
+#chatInput.chat-input-scroll {
+  overflow-y: auto;
 }
 
 .config-head {
@@ -2717,6 +2792,18 @@ body.owner .sidebar .owner-only {
   .picker-grid,
   .chat-layout {
     grid-template-columns: 1fr;
+  }
+
+  body[data-view="chat"] main {
+    height: calc(100vh - 108px);
+  }
+
+  body.desktop-app[data-view="chat"] main {
+    height: calc(100vh - 136px);
+  }
+
+  .chat-layout {
+    grid-template-rows: minmax(180px, 0.42fr) minmax(0, 1fr);
   }
 
   .post-meta-grid > .field,
