@@ -1,0 +1,283 @@
+.analysis-panel {
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.llm-settings-layout {
+  width: min(100%, 860px);
+  margin: 0 auto;
+  padding-top: 0;
+}
+
+.llm-settings-panel {
+  gap: 22px;
+  padding: 24px;
+}
+
+.settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.settings-head p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.settings-head .primary {
+  min-width: 120px;
+  min-height: 48px;
+  border-radius: 16px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-grid .wide-field {
+  grid-column: 1 / -1;
+}
+
+.settings-grid input,
+.settings-grid .app-select-button {
+  min-height: 52px;
+  border-radius: 16px;
+  padding-inline: 18px;
+  font-weight: 650;
+}
+
+.settings-note,
+.settings-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 46%);
+  padding: 12px 14px;
+}
+
+.settings-note {
+  align-items: flex-start;
+  color: var(--muted);
+}
+
+.settings-note strong,
+.settings-summary span {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+
+.settings-summary {
+  justify-content: space-between;
+}
+
+.settings-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.config-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.save-status {
+  display: inline-block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  opacity: 0.72;
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+.save-status.saved {
+  color: var(--accent-strong);
+  opacity: 1;
+}
+
+.config-body {
+  display: grid;
+  gap: 14px;
+}
+
+.config-body[hidden] {
+  display: none;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.three-col {
+  display: grid;
+  grid-template-columns: 150px 150px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.post-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.post-meta-grid > .field {
+  grid-column: span 3;
+}
+
+.post-meta-grid > .post-title-field {
+  grid-column: span 4;
+}
+
+.post-meta-grid > .post-title-ai-field {
+  grid-column: span 1;
+}
+
+.post-meta-grid > .post-category-field {
+  grid-column: span 3;
+}
+
+.post-meta-grid > .post-tags-field {
+  grid-column: span 4;
+}
+
+.post-meta-grid > .post-kind-field,
+.post-meta-grid > .post-status-field {
+  grid-column: span 3;
+}
+
+.post-meta-grid > .datetime-field {
+  grid-column: span 6;
+}
+
+.post-meta-grid label,
+.post-body-field label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.result {
+  min-height: 150px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  background: rgb(255 255 255 / 66%);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 18px 0 8px;
+  line-height: 1.25;
+}
+
+.markdown h1:first-child,
+.markdown h2:first-child,
+.markdown h3:first-child,
+.markdown h4:first-child,
+.markdown p:first-child {
+  margin-top: 0;
+}
+
+.markdown p {
+  margin: 0 0 12px;
+}
+
+.markdown p:last-child,
+.markdown ul:last-child,
+.markdown ol:last-child {
+  margin-bottom: 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.markdown li {
+  margin: 5px 0;
+}
+
+.markdown code {
+  background: rgb(47 125 121 / 10%);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.analysis-history {
+  display: grid;
+  gap: 10px;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 68px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.history-item {
+  min-height: 0;
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  text-align: left;
+  padding: 10px 12px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.history-delete {
+  min-height: 0;
+  padding: 0;
+}
+
+.history-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.history-item span {
+  font-weight: 650;
+}
+
+.history-item small {
+  color: var(--muted);
+}

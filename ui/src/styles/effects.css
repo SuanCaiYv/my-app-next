@@ -1,0 +1,40 @@
+@supports ((backdrop-filter: url("#liquid-glass-refraction")) or (-webkit-backdrop-filter: url("#liquid-glass-refraction"))) {
+  button:not(.brand),
+  .button-link,
+  .topbar,
+  .tabs,
+  .sidebar,
+  .custom-select-menu,
+  .ios-datetime-popover,
+  .post-card,
+  .analysis-panel,
+  .chat-context,
+  .chat-panel,
+  .dialog-body,
+  .map-photo-list article,
+  .empty {
+    backdrop-filter: url("#liquid-glass-refraction") var(--liquid-filter);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") var(--liquid-filter);
+  }
+
+  .topbar,
+  .sidebar,
+  .dialog-body {
+    backdrop-filter: url("#liquid-glass-refraction") var(--liquid-filter-strong);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") var(--liquid-filter-strong);
+  }
+
+  .photo-actions button,
+  .photo-actions .button-link,
+  .photo-preview-dialog .dialog-button,
+  .photo-preview-dialog .button-link {
+    backdrop-filter: url("#liquid-glass-refraction") blur(22px) saturate(1.42) brightness(1.08);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(22px) saturate(1.42) brightness(1.08);
+  }
+
+  #chatView .chat-context,
+  #chatView .chat-panel {
+    backdrop-filter: blur(16px) saturate(1.14);
+    -webkit-backdrop-filter: blur(16px) saturate(1.14);
+  }
+}

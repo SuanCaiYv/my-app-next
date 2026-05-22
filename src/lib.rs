@@ -12,19 +12,25 @@ use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{sse::Event, IntoResponse, Response, Sse},
     routing::{delete, get, post, put},
     Json, Router,
 };
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use exif::{In, Reader as ExifReader, Tag, Value as ExifValue};
-use image::{codecs::jpeg::JpegEncoder, ImageReader};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageDecoder, ImageEncoder, ImageReader};
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tower_http::{
+    services::ServeDir,
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 const MAX_PHOTO_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
@@ -119,6 +125,7 @@ struct AnalyzeRequest {
     photo_ids: Vec<i64>,
     free_text: Option<String>,
     save: Option<bool>,
+    provider: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +143,8 @@ struct ChatRequest {
     photo_ids: Vec<i64>,
     free_text: Option<String>,
     messages: Vec<ChatMessageInput>,
+    stream: Option<bool>,
+    provider: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,8 +208,6 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/index.html", get(serve_index))
-        .route("/app.js", get(serve_app_js))
-        .route("/styles.css", get(serve_styles_css))
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(me))
         .route("/api/posts", get(list_posts).post(create_post))
@@ -226,8 +233,18 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
                 .put(update_chat_session)
                 .delete(delete_chat_session),
         )
+        .route("/assets/{*path}", get(serve_asset))
         .nest_service("/uploads", ServeDir::new(uploads_dir.clone()))
-        .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
+        .fallback_service(
+            tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static(
+                        "no-store, no-cache, max-age=0, must-revalidate",
+                    ),
+                ))
+                .service(ServeDir::new(static_dir).append_index_html_on_directories(true)),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -305,20 +322,31 @@ async fn serve_index(State(state): State<AppState>) -> ApiResult<Response> {
     .await
 }
 
-async fn serve_app_js(State(state): State<AppState>) -> ApiResult<Response> {
-    serve_no_cache_text(
-        state.static_dir.join("app.js"),
-        "text/javascript; charset=utf-8",
+async fn serve_asset(
+    State(state): State<AppState>,
+    AxumPath(path): AxumPath<String>,
+) -> ApiResult<Response> {
+    if path.split('/').any(|part| part == ".." || part.is_empty()) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "无效资源路径"));
+    }
+    let path = state.static_dir.join("assets").join(path);
+    let content_type = mime_guess::from_path(&path)
+        .first_or_octet_stream()
+        .to_string();
+    let body = tokio::fs::read(path).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type.as_str()),
+            (
+                header::CACHE_CONTROL,
+                "no-store, no-cache, max-age=0, must-revalidate",
+            ),
+            (header::PRAGMA, "no-cache"),
+            (header::EXPIRES, "0"),
+        ],
+        body,
     )
-    .await
-}
-
-async fn serve_styles_css(State(state): State<AppState>) -> ApiResult<Response> {
-    serve_no_cache_text(
-        state.static_dir.join("styles.css"),
-        "text/css; charset=utf-8",
-    )
-    .await
+        .into_response())
 }
 
 async fn serve_no_cache_text(path: PathBuf, content_type: &'static str) -> ApiResult<Response> {
@@ -618,11 +646,7 @@ async fn analyze(
         ));
     }
 
-    let mut content = vec![json!({
-        "type": "text",
-        "text": format!("{}\n\n{}", input.prompt.trim(), text.trim())
-    })];
-
+    let mut photo_items = Vec::new();
     for id in &input.photo_ids {
         let photo = load_photo(&conn, *id)?;
         subject_parts.push(format!(
@@ -635,49 +659,111 @@ async fn analyze(
         ));
         let bytes = tokio::fs::read(state.uploads_dir.join(&photo.filename)).await?;
         let b64 = general_purpose::STANDARD.encode(bytes);
-        content.push(json!({
-            "type": "text",
-            "text": format!("图片：{}；说明：{}；分类：{}；标签：{}", photo.title, photo.description, photo.category, photo.tags)
-        }));
-        content.push(json!({
-            "type": "image_url",
-            "image_url": { "url": format!("data:{};base64,{}", photo.mime, b64) }
-        }));
+        photo_items.push((photo, b64));
     }
+
+    let is_anthropic = input.provider.as_deref().unwrap_or("") == "anthropic";
 
     let base_url = input
         .base_url
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("https://api.openai.com")
+        .unwrap_or(if is_anthropic { "https://api.anthropic.com" } else { "https://api.openai.com" })
         .trim()
         .trim_end_matches('/');
-    let endpoint = format!("{base_url}/v1/chat/completions");
-    let payload = json!({
-        "model": input.model.trim(),
-        "messages": [{ "role": "user", "content": content }],
-        "temperature": 0.3
-    });
 
-    let resp = state
-        .http
-        .post(endpoint)
-        .bearer_auth(input.api_key.trim())
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
-    let status = resp.status();
-    let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
-    if !status.is_success() {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("LLM 返回错误：{}", value),
-        ));
+    let answer: String;
+    if is_anthropic {
+        let endpoint = format!("{base_url}/v1/messages");
+        let mut content: Vec<Value> = vec![json!({
+            "type": "text",
+            "text": format!("{}\n\n{}", input.prompt.trim(), text.trim())
+        })];
+        for (photo, b64) in &photo_items {
+            content.push(json!({
+                "type": "text",
+                "text": format!("图片：{}；说明：{}；分类：{}；标签：{}", photo.title, photo.description, photo.category, photo.tags)
+            }));
+            content.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": photo.mime.as_str(),
+                    "data": b64
+                }
+            }));
+        }
+        let payload = json!({
+            "model": input.model.trim(),
+            "system": "你是个人知识库里的分析助手。优先基于用户选中的文章、想法、照片和指定片段回答；如果上下文不足，请明确说明。",
+            "messages": [{ "role": "user", "content": content }],
+            "max_tokens": 4096
+        });
+        let resp = state
+            .http
+            .post(endpoint)
+            .header("x-api-key", input.api_key.trim())
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+        let status = resp.status();
+        let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        if !status.is_success() {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("LLM 返回错误：{}", value),
+            ));
+        }
+        answer = value["content"][0]["text"]
+            .as_str()
+            .unwrap_or("没有拿到可读回复")
+            .to_string();
+    } else {
+        let endpoint = format!("{base_url}/v1/chat/completions");
+        let mut content = vec![json!({
+            "type": "text",
+            "text": format!("{}\n\n{}", input.prompt.trim(), text.trim())
+        })];
+        for (photo, b64) in &photo_items {
+            content.push(json!({
+                "type": "text",
+                "text": format!("图片：{}；说明：{}；分类：{}；标签：{}", photo.title, photo.description, photo.category, photo.tags)
+            }));
+            content.push(json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:{};base64,{}", photo.mime, b64) }
+            }));
+        }
+        let payload = json!({
+            "model": input.model.trim(),
+            "messages": [{ "role": "user", "content": content }],
+            "temperature": 0.3
+        });
+        let resp = state
+            .http
+            .post(endpoint)
+            .bearer_auth(input.api_key.trim())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+        let status = resp.status();
+        let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        if !status.is_success() {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("LLM 返回错误：{}", value),
+            ));
+        }
+        answer = value["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("没有拿到可读回复")
+            .to_string();
     }
-    let answer = value["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("没有拿到可读回复");
+
     let mut id = Value::Null;
     if input.save.unwrap_or(true) {
         let subject = if subject_parts.is_empty() {
@@ -709,7 +795,7 @@ async fn chat(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(input): Json<ChatRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
     require_owner(&state, &headers)?;
     if input.api_key.trim().is_empty() || input.model.trim().is_empty() {
         return Err(ApiError::new(
@@ -743,87 +829,275 @@ async fn chat(
         ));
     }
 
+    let mut photos = Vec::new();
+    for id in &input.photo_ids {
+        let photo = load_photo(&conn, *id)?;
+        let bytes = tokio::fs::read(state.uploads_dir.join(&photo.filename)).await?;
+        let b64 = general_purpose::STANDARD.encode(bytes);
+        photos.push((photo, b64));
+    }
+
+    let is_anthropic = input.provider.as_deref().unwrap_or("") == "anthropic";
+
     let base_url = input
         .base_url
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("https://api.openai.com")
+        .unwrap_or(if is_anthropic { "https://api.anthropic.com" } else { "https://api.openai.com" })
         .trim()
         .trim_end_matches('/');
-    let endpoint = format!("{base_url}/v1/chat/completions");
 
-    let mut messages = vec![json!({
-        "role": "system",
-        "content": "你是个人知识库里的对话助手。优先基于用户选中的文章、想法、照片和指定片段回答；如果上下文不足，请明确说明。"
-    })];
+    let stream = input.stream.unwrap_or(false);
 
-    if input.photo_ids.is_empty() {
+    if is_anthropic {
+        let endpoint = format!("{base_url}/v1/messages");
+        let system_text = "你是个人知识库里的对话助手。优先基于用户选中的文章、想法、照片和指定片段回答；如果上下文不足，请明确说明。";
+
+        let mut context_parts: Vec<Value> = vec![];
         if !context_text.trim().is_empty() {
-            messages.push(json!({
-                "role": "user",
-                "content": format!("以下是本次对话的上下文：\n{}", context_text.trim())
+            context_parts.push(json!({
+                "type": "text",
+                "text": format!("以下是本次对话的上下文：\n{}", context_text.trim())
             }));
         }
-    } else {
-        let mut context_content = vec![json!({
-            "type": "text",
-            "text": format!("以下是本次对话的上下文：\n{}", context_text.trim())
-        })];
-        for id in &input.photo_ids {
-            let photo = load_photo(&conn, *id)?;
-            let bytes = tokio::fs::read(state.uploads_dir.join(&photo.filename)).await?;
-            let b64 = general_purpose::STANDARD.encode(bytes);
-            context_content.push(json!({
+        for (photo, b64) in &photos {
+            context_parts.push(json!({
                 "type": "text",
                 "text": format!("图片：{}；说明：{}；分类：{}；标签：{}", photo.title, photo.description, photo.category, photo.tags)
             }));
-            context_content.push(json!({
-                "type": "image_url",
-                "image_url": { "url": format!("data:{};base64,{}", photo.mime, b64) }
+            context_parts.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": photo.mime.as_str(),
+                    "data": b64
+                }
             }));
         }
-        messages.push(json!({ "role": "user", "content": context_content }));
-    }
 
-    for message in &input.messages {
-        if message.content.trim().is_empty() {
-            continue;
+        let mut messages: Vec<Value> = vec![];
+        let mut current_user_parts: Vec<Value> = vec![];
+
+        for message in &input.messages {
+            if message.content.trim().is_empty() {
+                continue;
+            }
+            if message.role == "assistant" {
+                if !current_user_parts.is_empty() {
+                    messages.push(json!({ "role": "user", "content": current_user_parts }));
+                    current_user_parts = vec![];
+                }
+                messages.push(json!({ "role": "assistant", "content": message.content.trim() }));
+            } else {
+                current_user_parts.push(json!({ "type": "text", "text": message.content.trim() }));
+            }
         }
-        let role = if message.role == "assistant" {
-            "assistant"
+
+        if !current_user_parts.is_empty() {
+            if messages.is_empty() && !context_parts.is_empty() {
+                let mut merged = context_parts;
+                merged.append(&mut current_user_parts);
+                messages.push(json!({ "role": "user", "content": merged }));
+            } else {
+                if !context_parts.is_empty() {
+                    messages.push(json!({ "role": "user", "content": context_parts }));
+                }
+                messages.push(json!({ "role": "user", "content": current_user_parts }));
+            }
+        } else if !context_parts.is_empty() {
+            messages.push(json!({ "role": "user", "content": context_parts }));
+        }
+
+        let payload = json!({
+            "model": input.model.trim(),
+            "system": system_text,
+            "messages": messages,
+            "max_tokens": 4096,
+            "stream": stream
+        });
+
+        let req = state
+            .http
+            .post(endpoint)
+            .header("x-api-key", input.api_key.trim())
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&payload);
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("LLM 返回错误：{text}"),
+            ));
+        }
+
+        if stream {
+            let (tx, rx): (mpsc::Sender<Result<Event, std::convert::Infallible>>, _) = mpsc::channel(32);
+            let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+
+            tokio::spawn(async move {
+                let mut byte_stream = resp.bytes_stream();
+                let mut buf = String::new();
+
+                while let Some(result) = byte_stream.next().await {
+                    match result {
+                        Ok(bytes) => {
+                            buf.push_str(&String::from_utf8_lossy(&bytes));
+                            while let Some(pos) = buf.find('\n') {
+                                let line = buf.drain(..=pos).collect::<String>();
+                                let line = line.trim_end();
+                                if line.starts_with("data: ") {
+                                    let data = line.strip_prefix("data: ").unwrap_or("").trim();
+                                    if data == "[DONE]" {
+                                        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                                        return;
+                                    }
+                                    if let Ok(json) = serde_json::from_str::<Value>(data) {
+                                        if let Some(content) = json["delta"]["text"].as_str() {
+                                            if !content.is_empty() {
+                                                let _ = tx.send(Ok(Event::default().data(content))).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Ok(Sse::new(sse_stream).into_response())
         } else {
-            "user"
-        };
-        messages.push(json!({ "role": role, "content": message.content.trim() }));
-    }
+            let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+            let answer = value["content"][0]["text"]
+                .as_str()
+                .unwrap_or("没有拿到可读回复");
+            Ok(Json(json!({ "answer": answer })).into_response())
+        }
+    } else {
+        let endpoint = format!("{base_url}/v1/chat/completions");
 
-    let payload = json!({
-        "model": input.model.trim(),
-        "messages": messages,
-        "temperature": 0.4
-    });
+        let mut messages = vec![json!({
+            "role": "system",
+            "content": "你是个人知识库里的对话助手。优先基于用户选中的文章、想法、照片和指定片段回答；如果上下文不足，请明确说明。"
+        })];
 
-    let resp = state
-        .http
-        .post(endpoint)
-        .bearer_auth(input.api_key.trim())
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
-    let status = resp.status();
-    let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
-    if !status.is_success() {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("LLM 返回错误：{}", value),
-        ));
+        if photos.is_empty() {
+            if !context_text.trim().is_empty() {
+                messages.push(json!({
+                    "role": "user",
+                    "content": format!("以下是本次对话的上下文：\n{}", context_text.trim())
+                }));
+            }
+        } else {
+            let mut context_content = vec![json!({
+                "type": "text",
+                "text": format!("以下是本次对话的上下文：\n{}", context_text.trim())
+            })];
+            for (photo, b64) in &photos {
+                context_content.push(json!({
+                    "type": "text",
+                    "text": format!("图片：{}；说明：{}；分类：{}；标签：{}", photo.title, photo.description, photo.category, photo.tags)
+                }));
+                context_content.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{};base64,{}", photo.mime, b64) }
+                }));
+            }
+            messages.push(json!({ "role": "user", "content": context_content }));
+        }
+
+        for message in &input.messages {
+            if message.content.trim().is_empty() {
+                continue;
+            }
+            let role = if message.role == "assistant" {
+                "assistant"
+            } else {
+                "user"
+            };
+            messages.push(json!({ "role": role, "content": message.content.trim() }));
+        }
+
+        let payload = json!({
+            "model": input.model.trim(),
+            "messages": messages,
+            "temperature": 0.4,
+            "stream": stream
+        });
+
+        let resp = state
+            .http
+            .post(endpoint)
+            .bearer_auth(input.api_key.trim())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("LLM 返回错误：{text}"),
+            ));
+        }
+
+        if stream {
+            let (tx, rx): (mpsc::Sender<Result<Event, std::convert::Infallible>>, _) = mpsc::channel(32);
+            let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+
+            tokio::spawn(async move {
+                let mut byte_stream = resp.bytes_stream();
+                let mut buf = String::new();
+
+                while let Some(result) = byte_stream.next().await {
+                    match result {
+                        Ok(bytes) => {
+                            buf.push_str(&String::from_utf8_lossy(&bytes));
+                            while let Some(pos) = buf.find('\n') {
+                                let line = buf.drain(..=pos).collect::<String>();
+                                let line = line.trim_end();
+                                if line.starts_with("data: ") {
+                                    let data = line.strip_prefix("data: ").unwrap_or("").trim();
+                                    if data == "[DONE]" {
+                                        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                                        return;
+                                    }
+                                    if let Ok(json) = serde_json::from_str::<Value>(data) {
+                                        if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                            if !content.is_empty() {
+                                                let _ = tx.send(Ok(Event::default().data(content))).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Ok(Sse::new(sse_stream).into_response())
+        } else {
+            let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+            let answer = value["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("没有拿到可读回复");
+            let usage = value.get("usage").cloned().unwrap_or(Value::Null);
+            Ok(Json(json!({ "answer": answer, "usage": usage })).into_response())
+        }
     }
-    let answer = value["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("没有拿到可读回复");
-    let usage = value.get("usage").cloned().unwrap_or(Value::Null);
-    Ok(Json(json!({ "answer": answer, "usage": usage })))
 }
 
 async fn list_chat_sessions(
@@ -1016,14 +1290,19 @@ async fn ensure_photo_thumbnail(uploads_dir: &Path, filename: &str) -> ApiResult
 }
 
 fn create_thumbnail_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
-    let image = ImageReader::new(Cursor::new(bytes))
+    let mut decoder = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()?
-        .decode()
+        .into_decoder()
         .ok()?;
+    let icc_profile = decoder.icc_profile().ok().flatten();
+    let image = DynamicImage::from_decoder(decoder).ok()?;
     let thumbnail = image.thumbnail(PHOTO_THUMB_MAX_SIZE, PHOTO_THUMB_MAX_SIZE);
     let mut output = Vec::new();
     let mut encoder = JpegEncoder::new_with_quality(&mut output, 78);
+    if let Some(icc_profile) = icc_profile {
+        let _ = encoder.set_icc_profile(icc_profile);
+    }
     encoder.encode_image(&thumbnail).ok()?;
     Some(output)
 }
@@ -1034,7 +1313,7 @@ fn thumbnail_filename(filename: &str) -> String {
         .and_then(|item| item.to_str())
         .filter(|item| !item.is_empty())
         .unwrap_or(filename);
-    format!("thumb-{stem}.jpg")
+    format!("thumb-v2-{stem}.jpg")
 }
 
 fn load_post(conn: &Connection, id: i64) -> ApiResult<PostItem> {

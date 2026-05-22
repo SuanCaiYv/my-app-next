@@ -1,0 +1,93 @@
+.map-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.photo-map {
+  width: 100%;
+  min-height: 560px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-cool);
+  box-shadow: var(--content-shadow);
+}
+
+.leaflet-control-zoom {
+  border: 0 !important;
+  box-shadow: var(--glass-shadow) !important;
+}
+
+.leaflet-control-zoom a {
+  width: 36px !important;
+  height: 36px !important;
+  border: 1px solid rgb(255 255 255 / 58%) !important;
+  background: var(--glass-control) !important;
+  color: var(--ink) !important;
+  line-height: 34px !important;
+  backdrop-filter: blur(18px) saturate(1.14);
+  -webkit-backdrop-filter: blur(18px) saturate(1.14);
+}
+
+.leaflet-control-zoom-in {
+  border-radius: 12px 12px 0 0 !important;
+}
+
+.leaflet-control-zoom-out {
+  border-radius: 0 0 12px 12px !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: rgb(255 255 255 / 88%) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--shadow) !important;
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+.map-popup {
+  display: grid;
+  gap: 6px;
+  max-width: 220px;
+}
+
+.map-popup img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.map-popup p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.map-photo-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.map-photo-list article {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 38%, var(--line));
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgb(255 255 255 / 76%), rgb(255 255 255 / 48%) 48%, rgb(255 255 255 / 66%));
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  padding: 10px;
+  box-shadow: var(--liquid-rim), var(--content-shadow);
+}
+
+.map-photo-list img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+}

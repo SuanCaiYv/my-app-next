@@ -7,17 +7,17 @@ const APP_URL: &str = "http://127.0.0.1:34867";
 fn static_dir(_app: &tauri::App) -> anyhow::Result<PathBuf> {
     #[cfg(debug_assertions)]
     {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../static"))
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui/dist"))
     }
 
     #[cfg(not(debug_assertions))]
     {
         let resource_dir = _app.path().resource_dir()?;
-        let candidates = [resource_dir.join("static"), resource_dir.join("_up_/static")];
+        let candidates = [resource_dir.join("ui/dist"), resource_dir.join("_up_/ui/dist")];
         Ok(candidates
             .into_iter()
             .find(|path| path.exists())
-            .unwrap_or_else(|| resource_dir.join("static")))
+            .unwrap_or_else(|| resource_dir.join("ui/dist")))
     }
 }
 
