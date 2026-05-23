@@ -427,10 +427,10 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  flex: 1 1 0;
-  min-height: clamp(136px, 20vh, 190px);
+  flex: 0 0 auto;
+  min-height: 0;
   align-content: start;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .chat-picker-head {
@@ -463,8 +463,8 @@
 
 #chatView .chat-check-list {
   display: block;
-  height: 100%;
-  max-height: none;
+  height: 168px;
+  max-height: 168px;
   min-height: 0;
   align-content: normal;
   overflow: auto;
@@ -487,15 +487,13 @@
 
 #chatView .chat-check-list.expanded {
   height: auto;
-  max-height: min(52vh, 520px);
+  max-height: 360px;
   min-height: 0;
   overflow: auto;
 }
 
 #chatView .chat-picker-section:has(.chat-check-list.expanded) {
-  flex: 0 0 auto;
   grid-template-rows: auto minmax(0, auto);
-  overflow: visible;
 }
 
 .chat-check-list .check-item {

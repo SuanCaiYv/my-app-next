@@ -67,6 +67,8 @@ body[data-view="chat"] .topbar {
 
 .brand span {
   line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brand::before,
