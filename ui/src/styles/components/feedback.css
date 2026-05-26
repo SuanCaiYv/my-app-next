@@ -1,0 +1,55 @@
+.owner-only {
+  display: none;
+}
+
+body.owner .owner-only {
+  display: inline-flex;
+}
+
+body.owner .sidebar .owner-only {
+  display: block;
+}
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9999;
+  padding: 10px 14px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  background: rgb(25 31 34 / 78%);
+  color: white;
+  border-radius: 999px;
+  box-shadow: 0 16px 40px rgb(20 27 30 / 24%);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity var(--motion-fast), transform var(--motion-fast);
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.empty {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 42%);
+  padding: 28px;
+  text-align: center;
+  animation: fade-rise 220ms ease both;
+}
+
+.empty.compact {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+}

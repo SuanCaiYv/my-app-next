@@ -1,0 +1,261 @@
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.picker-grid.compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.picker-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.picker-head {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.picker-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.small-button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--muted);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.head-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.context-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 0;
+  margin-top: 2px;
+}
+
+.context-summary:empty {
+  display: none;
+}
+
+.section-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.check-list {
+  display: grid;
+  gap: 2px;
+  height: 168px;
+  align-content: start;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #f8f8f6;
+  cursor: pointer;
+}
+
+.check-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 5px 7px;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.check-item:hover {
+  background: #ffffff;
+}
+
+.check-item .check-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.check-item input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 52%, var(--glass-edge));
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 92%), rgb(255 255 255 / 56%)),
+    rgb(255 255 255 / 58%);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 78%), 0 5px 14px rgb(36 44 47 / 8%);
+  transition: background var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.check-item input::before,
+.large-check-item input::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border: solid white;
+  border-width: 0 0 2.5px 2.5px;
+  transform: translateY(-1px) rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform 140ms cubic-bezier(0.2, 0.9, 0.2, 1.2);
+}
+
+.check-item input:checked,
+.large-check-item input:checked {
+  border-color: color-mix(in srgb, var(--accent) 72%, white);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 78%, white), var(--accent-strong)),
+    var(--accent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 38%), 0 7px 16px rgb(47 125 121 / 20%);
+}
+
+.check-item input:checked::before,
+.large-check-item input:checked::before {
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+
+.check-item input:hover,
+.large-check-item input:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--glass-border));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 86%), 0 7px 18px rgb(36 44 47 / 10%);
+  transform: translateY(-1px);
+}
+
+.check-item input:focus-visible,
+.large-check-item input:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+.check-item:has(input:checked),
+.large-check-item:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: #e7f0ef;
+}
+
+.large-check-list {
+  display: grid;
+  gap: 2px;
+  max-height: min(58vh, 520px);
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.large-check-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  border-radius: 12px;
+  padding: 5px 7px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.large-check-item span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.large-check-item:hover {
+  background: #ffffff;
+}
+
+.large-check-item .check-thumb-large {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.large-check-item input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid var(--checkbox-border);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 58%)),
+    rgb(255 255 255 / 62%);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 7px 18px rgb(36 44 47 / 8%);
+  transition: background var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.picker-dialog {
+  width: min(1120px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  padding: 18px;
+  background: #f2f3f1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 15%);
+  border: 1px solid rgb(200 200 200);
+}
+
+.picker-dialog::before {
+  content: none;
+}
+
+.picker-dialog .large-check-list {
+  max-height: min(76vh, 720px);
+  background: #f2f3f1;
+}
+
+#pickerDialog .picker-dialog {
+  background: #f2f3f1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+#pickerDialog::backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

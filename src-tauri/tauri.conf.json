@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Hello.me",
-  "version": "0.1.0",
+  "productName": "Hallo",
+  "version": "0.1.1",
   "identifier": "me.hello.personal-studio",
   "build": {
-    "frontendDist": "http://127.0.0.1:34867"
+    "frontendDist": "../ui/dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -22,7 +22,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["../static"],
+    "resources": ["../ui/dist"],
     "macOS": {
       "minimumSystemVersion": "10.13",
       "dmg": {
