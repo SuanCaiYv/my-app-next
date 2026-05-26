@@ -37,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTokenState("");
     setRole("guest");
     setOwnerClickCount(0);
+    window.location.reload();
   };
 
   const incrementOwnerClick = () => {

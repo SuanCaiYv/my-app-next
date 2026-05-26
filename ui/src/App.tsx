@@ -45,6 +45,97 @@ function AppContent() {
     }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const tauri = (window as any).__TAURI__;
+    if (!tauri) return;
+    document.body.classList.add("desktop-app");
+
+    const appWindow =
+      tauri.webviewWindow?.getCurrentWebviewWindow?.() ||
+      tauri.window?.getCurrentWindow?.() ||
+      tauri.window?.getCurrent?.();
+    const startWindowDrag = () => {
+      const drag =
+        appWindow?.startDragging ||
+        tauri.window?.startDragging ||
+        tauri.webviewWindow?.startDragging;
+      return drag?.call(appWindow).catch?.(() => {});
+    };
+
+    const startDrag = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      if ((event.target as Element)?.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
+
+      const inTopbar = (event.target as Element)?.closest(".topbar");
+      const inWindowChrome = event.clientY <= 86;
+      const inResizeZone =
+        event.clientX >= window.innerWidth - 18 ||
+        event.clientY >= window.innerHeight - 18;
+      if (inResizeZone) return;
+      if (!inTopbar && !inWindowChrome) return;
+
+      startWindowDrag();
+    };
+
+    const dblClick = (event: MouseEvent) => {
+      if ((event.target as Element)?.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
+      if (!(event.target as Element)?.closest(".topbar")) return;
+      appWindow.toggleMaximize?.().catch(() => {});
+    };
+
+    document.addEventListener("mousedown", startDrag);
+    document.addEventListener("dblclick", dblClick);
+    return () => {
+      document.removeEventListener("mousedown", startDrag);
+      document.removeEventListener("dblclick", dblClick);
+    };
+  }, []);
+
+  useEffect(() => {
+    const topbar = document.querySelector(".topbar") as HTMLElement | null;
+    const brand = document.querySelector(".brand") as HTMLElement | null;
+    const tabs = document.querySelector(".tabs") as HTMLElement | null;
+    if (!topbar || !brand || !tabs || !("ResizeObserver" in window)) return;
+
+    let brandWidth = 0;
+
+    const check = () => {
+      const style = getComputedStyle(topbar);
+      const paddingLeft = parseFloat(style.paddingLeft) || 0;
+      const paddingRight = parseFloat(style.paddingRight) || 0;
+      const contentWidth = topbar.clientWidth - paddingLeft - paddingRight;
+
+      const tabsWidth = tabs.offsetWidth;
+      if (!brand.classList.contains("hidden") && brand.offsetWidth > 0) {
+        brandWidth = brand.offsetWidth;
+      }
+
+      const role = document.querySelector(".role") as HTMLElement | null;
+      const roleWidth = role && role.offsetWidth > 0 ? role.offsetWidth : 0;
+
+      const needed = brandWidth + tabsWidth + roleWidth + 40;
+
+      if (contentWidth < needed) {
+        brand.classList.add("hidden");
+      } else {
+        brand.classList.remove("hidden");
+      }
+    };
+
+    const ro = new ResizeObserver(check);
+    ro.observe(topbar);
+    ro.observe(tabs);
+    ro.observe(brand);
+
+    const mo = new MutationObserver(check);
+    mo.observe(tabs, { childList: true, subtree: true, attributes: true });
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+
   const handleBrandClick = useCallback(() => {
     incrementOwnerClick();
     const now = Date.now();
@@ -68,7 +159,7 @@ function AppContent() {
     e.stopPropagation();
   }, []);
 
-  const operationCard = showOwner ? (
+  const operationCard = (
     <aside className={`sidebar operation-card${view === "posts" ? " post-card" : ""}`} aria-label="操作">
       <div className="field sidebar-field">
         <label>搜索</label>
@@ -101,16 +192,18 @@ function AppContent() {
           ]}
         />
       </div>
-      <div className="sidebar-row">
-        <button id="newPhotoBtn" className="primary" onClick={() => setNewPhotoTrigger(t => t + 1)}>
-          上传照片
-        </button>
-        <button id="newPostBtn" className="primary" onClick={() => setNewPostTrigger(t => t + 1)}>
-          写点什么
-        </button>
-      </div>
+      {showOwner && (
+        <div className="sidebar-row">
+          <button id="newPhotoBtn" className="primary" onClick={() => setNewPhotoTrigger(t => t + 1)}>
+            上传照片
+          </button>
+          <button id="newPostBtn" className="primary" onClick={() => setNewPostTrigger(t => t + 1)}>
+            写点什么
+          </button>
+        </div>
+      )}
     </aside>
-  ) : null;
+  );
 
   return (
     <>
@@ -147,6 +240,7 @@ function AppContent() {
           title="Hello.me"
           onClick={handleBrandClick}
           onDoubleClick={handleBrandDblClick}
+          onMouseDown={(e) => e.preventDefault()}
         >
           <img src="/assets/logo.png" alt="" />
           <span>Hello.me</span>

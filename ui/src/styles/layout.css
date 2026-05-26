@@ -1,9 +1,10 @@
 .topbar {
   width: min(calc(100% - 56px), 1360px);
-  min-height: 68px;
-  display: flex;
+  min-height: 90px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  padding: 12px 28px 12px 80px;
+  padding: 12px 28px;
   border: 1px solid color-mix(in srgb, var(--glass-border) 68%, var(--glass-edge));
   border-radius: 24px;
   background: var(--glass-panel);
@@ -14,14 +15,15 @@
   -webkit-backdrop-filter: var(--liquid-filter-strong);
   box-shadow: var(--liquid-rim), 0 18px 50px rgb(36 44 47 / 9%);
   margin: 12px auto 0;
+  min-width: 680px;
   -webkit-app-region: drag;
   app-region: drag;
 }
 
 body.desktop-app .topbar {
   width: min(calc(100% - 112px), 1360px);
-  margin-top: 26px;
-  padding: 12px 28px 12px 86px;
+  margin-top: 30px;
+  padding: 12px 28px;
 }
 
 body[data-view="chat"] .topbar {
@@ -29,14 +31,10 @@ body[data-view="chat"] .topbar {
   top: auto;
 }
 
-.topbar button,
-.topbar .tab,
-.topbar .brand {
+.brand {
+  grid-column: 1;
   -webkit-app-region: no-drag;
   app-region: no-drag;
-}
-
-.brand {
   border: 0;
   border-radius: 8px;
   padding: 0;
@@ -52,17 +50,19 @@ body[data-view="chat"] .topbar {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
-  flex: 0 0 auto;
-  margin-right: auto;
+  min-height: 66px;
+  justify-self: start;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brand img {
-  width: 36px;
-  height: 36px;
+  width: 66px;
+  height: 66px;
   display: block;
   object-fit: contain;
   filter: drop-shadow(0 6px 12px rgb(36 44 47 / 8%));
+  transform: translateY(2px);
 }
 
 .brand span {
@@ -83,12 +83,20 @@ body[data-view="chat"] .topbar {
   transform: none;
 }
 
+.brand.hidden {
+  display: none;
+}
+
 .tabs {
+  grid-column: 2;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   display: inline-flex;
   align-items: center;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  justify-content: center;
+  position: static;
+  justify-self: center;
+  margin: 0;
   gap: 6px;
   padding: 4px;
   background: rgb(255 255 255 / 32%);
@@ -101,6 +109,8 @@ body[data-view="chat"] .topbar {
 }
 
 .tab {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
@@ -123,7 +133,10 @@ body[data-view="chat"] .topbar {
 }
 
 .role {
-  margin-left: auto;
+  grid-column: 3;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  justify-self: end;
   color: var(--muted);
   display: none;
 }
@@ -158,6 +171,44 @@ body[data-view="chat"] #chatView {
   min-height: 0;
   overflow: hidden;
   overflow-anchor: none;
+}
+
+html:has(body[data-view="posts"]),
+body[data-view="posts"],
+body[data-view="posts"] main,
+body[data-view="posts"] #postsView,
+body[data-view="posts"] #postList {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html:has(body[data-view="posts"])::-webkit-scrollbar,
+body[data-view="posts"]::-webkit-scrollbar,
+body[data-view="posts"] main::-webkit-scrollbar,
+body[data-view="posts"] #postsView::-webkit-scrollbar,
+body[data-view="posts"] #postList::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html:has(body[data-view="photos"]),
+body[data-view="photos"],
+body[data-view="photos"] main,
+body[data-view="photos"] #photosView,
+body[data-view="photos"] #photoList {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html:has(body[data-view="photos"])::-webkit-scrollbar,
+body[data-view="photos"]::-webkit-scrollbar,
+body[data-view="photos"] main::-webkit-scrollbar,
+body[data-view="photos"] #photosView::-webkit-scrollbar,
+body[data-view="photos"] #photoList::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .workspace {
@@ -213,7 +264,7 @@ body[data-view="chat"] #chatView {
   isolation: isolate;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--glass-border) 42%, var(--line));
-  border-radius: 8px;
+  border-radius: 20px;
   background: linear-gradient(145deg, rgb(255 255 255 / 76%), rgb(255 255 255 / 48%) 48%, rgb(255 255 255 / 64%));
   backdrop-filter: blur(14px) saturate(1.12);
   -webkit-backdrop-filter: blur(14px) saturate(1.12);
@@ -227,7 +278,7 @@ body[data-view="photos"] .photo-grid .operation-card {
   height: auto;
   align-self: stretch;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 18px 14px 10px;
 }
 
 body[data-view="posts"] .list .operation-card input,

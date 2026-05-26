@@ -3,11 +3,17 @@ import { useAuth } from "../context/AuthContext";
 import { listPhotos, uploadPhoto, updatePhoto, deletePhoto } from "../api";
 import type { PhotoItem } from "../types";
 import { useToast } from "../hooks/useToast";
+import { useConfirm } from "../hooks/useConfirm";
 
 function formatDateTimeText(value: string) {
   const d = new Date(value);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+interface ImageSize {
+  width: number;
+  height: number;
 }
 
 export default function PhotosPage({
@@ -25,8 +31,10 @@ export default function PhotosPage({
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewPhoto, setPreviewPhoto] = useState<PhotoItem | null>(null);
+  const [previewInitialSize, setPreviewInitialSize] = useState<ImageSize>({ width: 0, height: 0 });
   const [editPhoto, setEditPhoto] = useState<PhotoItem | null>(null);
   const { show: showToast, element: toastElement } = useToast();
+  const { confirm: confirmDialog, element: confirmElement } = useConfirm();
   const [gridWidth, setGridWidth] = useState(0);
   const [photoHeights, setPhotoHeights] = useState<Record<number, number>>({});
   const gridRef = useRef<HTMLDivElement>(null);
@@ -104,6 +112,24 @@ export default function PhotosPage({
     return cols;
   }, [filtered, columnCount, photoHeights]);
 
+  const handlePreview = useCallback((photo: PhotoItem) => {
+    const img = new Image();
+    img.onload = () => {
+      setPreviewInitialSize({ width: img.naturalWidth, height: img.naturalHeight });
+      setPreviewPhoto(photo);
+    };
+    img.onerror = () => {
+      setPreviewInitialSize({ width: 0, height: 0 });
+      setPreviewPhoto(photo);
+    };
+    img.src = photo.url;
+  }, []);
+
+  const handleClosePreview = useCallback(() => {
+    setPreviewPhoto(null);
+    setPreviewInitialSize({ width: 0, height: 0 });
+  }, []);
+
   const handleSave = async (photo: Partial<PhotoItem>, file?: File) => {
     try {
       if (editPhoto?.id && !file) {
@@ -127,7 +153,8 @@ export default function PhotosPage({
   };
 
   const handleDelete = async () => {
-    if (!editPhoto?.id || !confirm("确定删除这张照片？")) return;
+    if (!editPhoto?.id) return;
+    if (!(await confirmDialog("确定删除这张照片？"))) return;
     try {
       await deletePhoto(editPhoto.id);
       setEditPhoto(null);
@@ -162,7 +189,7 @@ export default function PhotosPage({
               {columnIndex === 0 && operationCard}
               {column.map((photo) => (
                 <article key={photo.id} className="photo-card" data-photo-card={photo.id}>
-                  <div className="photo-frame" onClick={() => setPreviewPhoto(photo)}>
+                  <div className="photo-frame" onClick={() => handlePreview(photo)}>
                     <img
                       src={photo.thumbnail_url || photo.url}
                       alt={photo.title || photo.original_name}
@@ -170,13 +197,13 @@ export default function PhotosPage({
                       decoding="async"
                       onLoad={(e) => measurePhotoCard(photo.id, e.currentTarget.closest(".photo-card"))}
                     />
-                    <div className="photo-actions">
-                      <button title="预览" aria-label="预览" onClick={(e) => { e.stopPropagation(); setPreviewPhoto(photo); }}>⤢</button>
-                      <a className="button-link" href={photo.url} download={photo.original_name || photo.filename} title="下载" aria-label="下载" onClick={(e) => e.stopPropagation()}>↓</a>
-                      {role === "owner" && (
+                    {role === "owner" && (
+                      <div className="photo-actions">
+                        <button title="预览" aria-label="预览" onClick={(e) => { e.stopPropagation(); handlePreview(photo); }}>⤢</button>
+                        <a className="button-link" href={photo.url} download={photo.original_name || photo.filename} title="下载" aria-label="下载" onClick={(e) => e.stopPropagation()}>↓</a>
                         <button title="编辑" aria-label="编辑" onClick={(e) => { e.stopPropagation(); setEditPhoto(photo); }}>✎</button>
-                      )}
-                    </div>
+                      </div>
+                    )}
                     <div className="photo-info">
                       <h3>{photo.title || photo.original_name}</h3>
                       <div className="meta">
@@ -193,7 +220,7 @@ export default function PhotosPage({
         )}
       </div>
 
-      <PhotoPreviewDialog photo={previewPhoto} onClose={() => setPreviewPhoto(null)} />
+      <PhotoPreviewDialog photo={previewPhoto} initialSize={previewInitialSize} onClose={handleClosePreview} />
       <PhotoEditDialog
         photo={editPhoto}
         onClose={() => setEditPhoto(null)}
@@ -201,30 +228,38 @@ export default function PhotosPage({
         onDelete={handleDelete}
       />
 
+      {confirmElement}
       {toastElement}
     </section>
   );
 }
 
-function PhotoPreviewDialog({ photo, onClose }: { photo: PhotoItem | null; onClose: () => void }) {
+function PhotoPreviewDialog({ photo, initialSize, onClose }: { photo: PhotoItem | null; initialSize: ImageSize; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [drag, setDrag] = useState<null | { startX: number; startY: number; originX: number; originY: number }>(null);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (photo) {
       setScale(1);
       setPan({ x: 0, y: 0 });
       setDrag(null);
-      setImageSize({ width: 0, height: 0 });
+      if (initialSize.width > 0 && initialSize.height > 0) {
+        setImageSize(initialSize);
+        setLoading(false);
+      } else {
+        setImageSize({ width: 0, height: 0 });
+        setLoading(true);
+      }
       dialogRef.current?.showModal();
     } else {
       dialogRef.current?.close();
     }
-  }, [photo]);
+  }, [photo, initialSize]);
 
   useEffect(() => {
     const updateViewportSize = () => setViewportSize({ width: window.innerWidth, height: window.innerHeight });
@@ -254,7 +289,7 @@ function PhotoPreviewDialog({ photo, onClose }: { photo: PhotoItem | null; onClo
     : Math.round(maxPreviewWidth / imageAspect);
 
   return (
-    <dialog ref={dialogRef} className="photo-preview-dialog-overlay" onClose={onClose} onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <dialog ref={dialogRef} id="photoPreviewDialog" className={`photo-preview-dialog-overlay${loading ? " loading" : ""}`} onClose={onClose} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <section
         className="dialog-body wide photo-preview-dialog"
         style={{
@@ -296,10 +331,14 @@ function PhotoPreviewDialog({ photo, onClose }: { photo: PhotoItem | null; onClo
               "--preview-pan-y": `${pan.y}px`,
             } as CSSProperties}
             draggable={false}
-            onLoad={(e) => setImageSize({
-              width: e.currentTarget.naturalWidth,
-              height: e.currentTarget.naturalHeight,
-            })}
+            onLoad={(e) => {
+              setImageSize({
+                width: e.currentTarget.naturalWidth,
+                height: e.currentTarget.naturalHeight,
+              });
+              setLoading(false);
+            }}
+            onError={() => setLoading(false)}
             onDoubleClick={() => setPreviewScale(scale > 1 ? 1 : 2)}
             onPointerDown={(e) => {
               if (scale <= 1 || e.button !== 0) return;
@@ -443,13 +482,11 @@ function PhotoEditDialog({
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} />
         </div>
         {error && <div className="dialog-error">{error}</div>}
-        {photo.id > 0 && (
-          <div className="dialog-actions">
-            <button className="danger" type="button" onClick={onDelete} disabled={saving}>删除</button>
-            <button className="secondary" type="button" onClick={onClose} disabled={saving}>取消</button>
-            <button className="primary" type="submit" disabled={saving}>{saving ? "保存中..." : "保存"}</button>
-          </div>
-        )}
+        <div className="dialog-actions">
+          {photo.id > 0 && <button className="danger" type="button" onClick={onDelete} disabled={saving}>删除</button>}
+          <button className="secondary" type="button" onClick={onClose} disabled={saving}>取消</button>
+          <button className="primary" type="submit" disabled={saving}>{saving ? (photo.id > 0 ? "保存中..." : "上传中...") : (photo.id > 0 ? "保存" : "上传")}</button>
+        </div>
       </form>
     </dialog>
   );

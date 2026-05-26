@@ -121,6 +121,26 @@ body.desktop-app *::-webkit-scrollbar {
   }
 }
 
+@keyframes reader-exit {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.985);
+  }
+}
+
+@keyframes backdrop-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes spin {
   to {
     transform: translate(-50%, -50%) rotate(360deg);

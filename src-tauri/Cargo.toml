@@ -1,6 +1,6 @@
 [package]
 name = "hello-me-desktop"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [build-dependencies]
@@ -11,4 +11,4 @@ anyhow = "1"
 personal-studio = { path = ".." }
 tauri = { version = "2", features = ["devtools"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
-
+tracing = "0.1"

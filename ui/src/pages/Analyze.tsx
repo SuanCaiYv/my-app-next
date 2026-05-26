@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
+import {
+  createLlmProfile,
+  currentModel,
+  DEFAULT_TITLE_PROMPT,
+  loadLlmProfiles,
+  saveLlmProfiles,
+  type LlmProfile,
+} from "../llmSettings";
 
 type ProviderPreset = {
   id: string;
@@ -109,13 +117,14 @@ const providers: ProviderPreset[] = [
   {
     id: "mimo",
     name: "MiMo / 小米",
-    baseUrl: "https://api.mimo-v2.com/v1",
+    baseUrl: "https://api.xiaomimimo.com/v1",
     models: [
-      { value: "xiaomi/mimo-v2-flash", label: "xiaomi/mimo-v2-flash" },
-      { value: "xiaomi/mimo-v2-pro", label: "xiaomi/mimo-v2-pro" },
-      { value: "xiaomi/mimo-v2-omni", label: "xiaomi/mimo-v2-omni" },
+      { value: "mimo-v2.5-pro", label: "mimo-v2.5-pro" },
+      { value: "mimo-v2.5", label: "mimo-v2.5" },
+      { value: "mimo-v2-pro", label: "mimo-v2-pro" },
+      { value: "mimo-v2-omni", label: "mimo-v2-omni" },
     ],
-    note: "MiMo OpenAI-compatible 入口；如账号给了专属 endpoint，可手动覆盖。",
+    note: "MiMo OpenAI-compatible Chat Completions；默认使用小米官方平台 endpoint。",
   },
   {
     id: "custom",
@@ -125,10 +134,6 @@ const providers: ProviderPreset[] = [
     note: "适合 Ollama、LM Studio、vLLM、LiteLLM、One API 等 OpenAI-compatible 服务。",
   },
 ];
-
-function currentModel(preset: string, custom: string) {
-  return preset === "custom" ? custom : preset;
-}
 
 function parseContextLimit(value: string): number | null {
   const trimmed = value.trim().toLowerCase().replace(/,/g, "");
@@ -144,54 +149,92 @@ function parseContextLimit(value: string): number | null {
 }
 
 export default function AnalyzePage() {
-  const initialProvider = localStorage.getItem("llmProvider") || "openai";
-  const [providerId, setProviderId] = useState(initialProvider);
-  const [apiKey, setApiKey] = useState(localStorage.getItem("apiKey") || "");
-  const [baseUrl, setBaseUrl] = useState(localStorage.getItem("baseUrl") || providers.find((p) => p.id === initialProvider)?.baseUrl || "");
-  const [modelPreset, setModelPreset] = useState(localStorage.getItem("modelPreset") || "");
-  const [customModel, setCustomModel] = useState(localStorage.getItem("customModel") || "");
-  const [contextLimit, setContextLimit] = useState(localStorage.getItem("contextLimit") || "");
+  const initialSettings = useMemo(() => loadLlmProfiles(), []);
+  const [profiles, setProfiles] = useState<LlmProfile[]>(initialSettings.profiles);
+  const [activeId, setActiveId] = useState(initialSettings.activeId);
   const { show: showToast, element: toastElement } = useToast();
 
+  const activeProfile = profiles.find((item) => item.id === activeId) || profiles[0];
+  const providerId = activeProfile.providerId;
   const provider = useMemo(() => providers.find((item) => item.id === providerId) || providers[0], [providerId]);
   const modelOptions = useMemo(() => [
     { value: "", label: "选择模型" },
     ...provider.models,
     { value: "custom", label: "自定义模型名" },
   ], [provider]);
-  const model = currentModel(modelPreset, customModel);
+
+  const updateActiveProfile = (patch: Partial<LlmProfile>) => {
+    setProfiles((prev) => prev.map((profile) => (
+      profile.id === activeProfile.id ? { ...profile, ...patch } : profile
+    )));
+  };
 
   const handleProviderChange = (nextProviderId: string) => {
     const nextProvider = providers.find((item) => item.id === nextProviderId) || providers[0];
-    setProviderId(nextProvider.id);
-    setBaseUrl(nextProvider.baseUrl);
-    setModelPreset(nextProvider.models[0]?.value || "");
-    if (nextProvider.id !== "custom") setCustomModel("");
+    updateActiveProfile({
+      providerId: nextProvider.id,
+      baseUrl: nextProvider.baseUrl,
+      modelPreset: nextProvider.models[0]?.value || "",
+      customModel: nextProvider.id === "custom" ? activeProfile.customModel : "",
+    });
+  };
+
+  const handleAddProfile = () => {
+    const nextProvider = providers[0];
+    const nextProfile = createLlmProfile({
+      name: `配置 ${profiles.length + 1}`,
+      providerId: nextProvider.id,
+      baseUrl: nextProvider.baseUrl,
+      modelPreset: nextProvider.models[0]?.value || "",
+    });
+    setProfiles((prev) => [...prev, nextProfile]);
+    setActiveId(nextProfile.id);
+  };
+
+  const handleDuplicateProfile = () => {
+    const nextProfile = createLlmProfile({
+      ...activeProfile,
+      id: undefined,
+      name: `${activeProfile.name || "配置"} 副本`,
+    });
+    setProfiles((prev) => [...prev, nextProfile]);
+    setActiveId(nextProfile.id);
+  };
+
+  const handleDeleteProfile = () => {
+    if (profiles.length <= 1) {
+      showToast("至少保留一套配置");
+      return;
+    }
+    const index = profiles.findIndex((profile) => profile.id === activeProfile.id);
+    const nextProfiles = profiles.filter((profile) => profile.id !== activeProfile.id);
+    const nextActive = nextProfiles[Math.max(0, index - 1)] || nextProfiles[0];
+    setProfiles(nextProfiles);
+    setActiveId(nextActive.id);
   };
 
   const handleSave = () => {
+    const model = currentModel(activeProfile);
     if (!model.trim()) {
       showToast("请选择或填写模型");
       return;
     }
-    const parsedLimit = parseContextLimit(contextLimit);
-    if (contextLimit.trim() && parsedLimit === null) {
+    const parsedLimit = parseContextLimit(activeProfile.contextLimit);
+    if (activeProfile.contextLimit.trim() && parsedLimit === null) {
       showToast("上下文大小格式不正确");
       return;
     }
-    localStorage.setItem("llmProvider", providerId);
-    localStorage.setItem("apiKey", apiKey);
-    localStorage.setItem("baseUrl", baseUrl);
-    localStorage.setItem("modelPreset", modelPreset);
-    localStorage.setItem("customModel", customModel);
-    localStorage.setItem("model", model);
-    if (parsedLimit !== null) {
-      localStorage.setItem("contextLimit", String(parsedLimit));
-    } else {
-      localStorage.removeItem("contextLimit");
-    }
-    showToast("LLM 设置已保存");
+    const normalizedProfiles = profiles.map((profile) => (
+      profile.id === activeProfile.id
+        ? { ...profile, contextLimit: parsedLimit !== null ? String(parsedLimit) : "" }
+        : profile
+    ));
+    setProfiles(normalizedProfiles);
+    saveLlmProfiles(normalizedProfiles, activeProfile.id);
+    showToast("LLM 配置已保存并切换");
   };
+
+  const model = currentModel(activeProfile);
 
   return (
     <section className="view active" id="analyzeView">
@@ -199,17 +242,41 @@ export default function AnalyzePage() {
         <section className="analysis-panel llm-settings-panel">
           <header className="settings-head">
             <div>
-              <h2>LLM 设置</h2>
-              <p>这些设置会用于对话、标题生成和后续 LLM 功能。</p>
+              <h2>LLM 配置</h2>
+              <p>保存多套模型配置，并选择当前用于对话、标题生成和分析的配置。</p>
             </div>
             <button className="primary" onClick={handleSave}>保存设置</button>
           </header>
 
+          <div className="profile-toolbar">
+            <div className="field">
+              <label>当前配置</label>
+              <Select
+                value={activeProfile.id}
+                ariaLabel="当前配置"
+                onChange={setActiveId}
+                options={profiles.map((item) => ({ value: item.id, label: item.name || "未命名配置" }))}
+              />
+            </div>
+            <button className="secondary" onClick={handleAddProfile}>新增</button>
+            <button className="secondary" onClick={handleDuplicateProfile}>复制</button>
+            <button className="secondary" onClick={handleDeleteProfile}>删除</button>
+          </div>
+
           <div className="settings-grid">
+            <div className="field">
+              <label>配置名称</label>
+              <input
+                placeholder="例如 工作主力、MiMo、Claude"
+                value={activeProfile.name}
+                onChange={(e) => updateActiveProfile({ name: e.target.value })}
+              />
+            </div>
+
             <div className="field">
               <label>服务商</label>
               <Select
-                value={providerId}
+                value={activeProfile.providerId}
                 ariaLabel="服务商"
                 onChange={handleProviderChange}
                 options={providers.map((item) => ({ value: item.id, label: item.name }))}
@@ -218,20 +285,29 @@ export default function AnalyzePage() {
 
             <div className="field">
               <label>API Key</label>
-              <input placeholder="填入当前服务商的 API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" />
+              <input
+                placeholder="填入当前服务商的 API Key"
+                value={activeProfile.apiKey}
+                onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
+                type="password"
+              />
             </div>
 
             <div className="field wide-field">
               <label>Base URL</label>
-              <input placeholder="OpenAI-compatible Base URL" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+              <input
+                placeholder="OpenAI-compatible Base URL"
+                value={activeProfile.baseUrl}
+                onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
+              />
             </div>
 
             <div className="field">
               <label>模型</label>
               <Select
-                value={modelPreset}
+                value={activeProfile.modelPreset}
                 ariaLabel="模型"
-                onChange={setModelPreset}
+                onChange={(value) => updateActiveProfile({ modelPreset: value })}
                 options={modelOptions}
               />
             </div>
@@ -240,10 +316,12 @@ export default function AnalyzePage() {
               <label>自定义模型名</label>
               <input
                 placeholder="例如 vendor/model-name"
-                value={customModel}
+                value={activeProfile.customModel}
                 onChange={(e) => {
-                  setCustomModel(e.target.value);
-                  if (modelPreset !== "custom") setModelPreset("custom");
+                  updateActiveProfile({
+                    customModel: e.target.value,
+                    modelPreset: activeProfile.modelPreset === "custom" ? activeProfile.modelPreset : "custom",
+                  });
                 }}
               />
             </div>
@@ -252,8 +330,18 @@ export default function AnalyzePage() {
               <label>上下文大小</label>
               <input
                 placeholder="例如 4096、4K、128K、1M"
-                value={contextLimit}
-                onChange={(e) => setContextLimit(e.target.value)}
+                value={activeProfile.contextLimit}
+                onChange={(e) => updateActiveProfile({ contextLimit: e.target.value })}
+              />
+            </div>
+
+            <div className="field wide-field">
+              <label>生成标题提示词</label>
+              <textarea
+                className="title-prompt-input"
+                placeholder={DEFAULT_TITLE_PROMPT}
+                value={activeProfile.titlePrompt}
+                onChange={(e) => updateActiveProfile({ titlePrompt: e.target.value })}
               />
             </div>
           </div>
@@ -264,7 +352,7 @@ export default function AnalyzePage() {
           </div>
 
           <div className="settings-summary">
-            <span>当前模型</span>
+            <span>当前启用</span>
             <strong>{model || "未选择"}</strong>
           </div>
         </section>

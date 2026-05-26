@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "Default permissions for the main Hello.me window.",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:34867/**", "http://localhost:34867/**"]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

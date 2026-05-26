@@ -1,10 +1,11 @@
 use std::{
     collections::HashSet,
+    error::Error as StdError,
     fs,
     io::Cursor,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use anyhow::{Context, Result};
@@ -31,10 +32,13 @@ use tower_http::{
     set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
+use tracing::{info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
 const MAX_PHOTO_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const PHOTO_THUMB_MAX_SIZE: u32 = 720;
+static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 #[derive(Clone)]
 struct AppState {
@@ -177,9 +181,33 @@ struct ChatSessionInput {
 }
 
 pub fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("personal_studio=info,tower_http=info")
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("personal_studio=info,tower_http=info"));
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
         .try_init();
+}
+
+pub fn init_tracing_with_file(log_dir: PathBuf) -> Result<PathBuf> {
+    fs::create_dir_all(&log_dir).context("create log directory")?;
+    let log_path = log_dir.join("backend.log");
+    let file_appender = tracing_appender::rolling::never(&log_dir, "backend.log");
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("personal_studio=info,tower_http=info"));
+
+    let _ = LOG_GUARD.set(guard);
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_writer),
+        )
+        .try_init();
+    Ok(log_path)
 }
 
 pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr) -> Result<()> {
@@ -193,7 +221,7 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
     let owner_password =
         std::env::var("PERSONAL_SITE_PASSWORD").unwrap_or_else(|_| "123456".to_string());
     if owner_password == "123456" {
-        eprintln!("PERSONAL_SITE_PASSWORD is not set. Temporary owner password: change-me");
+        warn!("PERSONAL_SITE_PASSWORD is not set. Temporary owner password: change-me");
     }
 
     let state = AppState {
@@ -248,7 +276,7 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    println!("Personal Studio is running at http://{addr}");
+    info!("Personal Studio is running at http://{addr}");
     axum::serve(tokio::net::TcpListener::bind(addr).await?, app).await?;
     Ok(())
 }
@@ -674,7 +702,7 @@ async fn analyze(
 
     let answer: String;
     if is_anthropic {
-        let endpoint = format!("{base_url}/v1/messages");
+        let endpoint = llm_endpoint(base_url, "/v1/messages");
         let mut content: Vec<Value> = vec![json!({
             "type": "text",
             "text": format!("{}\n\n{}", input.prompt.trim(), text.trim())
@@ -708,21 +736,25 @@ async fn analyze(
             .json(&payload)
             .send()
             .await
-            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+            .map_err(|err| {
+                let msg = format_reqwest_error(&err);
+                warn!("{msg}");
+                ApiError::new(StatusCode::BAD_GATEWAY, msg)
+            })?;
         let status = resp.status();
-        let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        let body_text = resp.text().await.unwrap_or_default();
+        let value: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| json!({ "message": body_text }));
         if !status.is_success() {
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("LLM 返回错误：{}", value),
-            ));
+            let msg = format!("LLM 返回错误：{}", extract_llm_error(&value));
+            warn!("{msg} (HTTP {status}, 原始响应: {body_text})");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, msg));
         }
         answer = value["content"][0]["text"]
             .as_str()
             .unwrap_or("没有拿到可读回复")
             .to_string();
     } else {
-        let endpoint = format!("{base_url}/v1/chat/completions");
+        let endpoint = llm_endpoint(base_url, "/v1/chat/completions");
         let mut content = vec![json!({
             "type": "text",
             "text": format!("{}\n\n{}", input.prompt.trim(), text.trim())
@@ -737,26 +769,32 @@ async fn analyze(
                 "image_url": { "url": format!("data:{};base64,{}", photo.mime, b64) }
             }));
         }
-        let payload = json!({
+        let mut payload = json!({
             "model": input.model.trim(),
             "messages": [{ "role": "user", "content": content }],
             "temperature": 0.3
         });
-        let resp = state
-            .http
-            .post(endpoint)
-            .bearer_auth(input.api_key.trim())
+        apply_openai_compatible_provider_options(&mut payload, input.provider.as_deref());
+        let resp = with_llm_auth(
+            state.http.post(endpoint),
+            input.provider.as_deref(),
+            input.api_key.trim(),
+        )
             .json(&payload)
             .send()
             .await
-            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+            .map_err(|err| {
+                let msg = format_reqwest_error(&err);
+                warn!("{msg}");
+                ApiError::new(StatusCode::BAD_GATEWAY, msg)
+            })?;
         let status = resp.status();
-        let value: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        let body_text = resp.text().await.unwrap_or_default();
+        let value: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| json!({ "message": body_text }));
         if !status.is_success() {
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("LLM 返回错误：{}", value),
-            ));
+            let msg = format!("LLM 返回错误：{}", extract_llm_error(&value));
+            warn!("{msg} (HTTP {status}, 原始响应: {body_text})");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, msg));
         }
         answer = value["choices"][0]["message"]["content"]
             .as_str()
@@ -850,7 +888,7 @@ async fn chat(
     let stream = input.stream.unwrap_or(false);
 
     if is_anthropic {
-        let endpoint = format!("{base_url}/v1/messages");
+        let endpoint = llm_endpoint(base_url, "/v1/messages");
         let system_text = "你是个人知识库里的对话助手。优先基于用户选中的文章、想法、照片和指定片段回答；如果上下文不足，请明确说明。";
 
         let mut context_parts: Vec<Value> = vec![];
@@ -932,9 +970,10 @@ async fn chat(
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            let value: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "message": text }));
             return Err(ApiError::new(
                 StatusCode::BAD_GATEWAY,
-                format!("LLM 返回错误：{text}"),
+                format!("LLM 返回错误：{}", extract_llm_error(&value)),
             ));
         }
 
@@ -962,7 +1001,8 @@ async fn chat(
                                     if let Ok(json) = serde_json::from_str::<Value>(data) {
                                         if let Some(content) = json["delta"]["text"].as_str() {
                                             if !content.is_empty() {
-                                                let _ = tx.send(Ok(Event::default().data(content))).await;
+                                                let payload = json!({ "delta": { "text": content } }).to_string();
+                                                let _ = tx.send(Ok(Event::default().data(payload))).await;
                                             }
                                         }
                                     }
@@ -983,7 +1023,7 @@ async fn chat(
             Ok(Json(json!({ "answer": answer })).into_response())
         }
     } else {
-        let endpoint = format!("{base_url}/v1/chat/completions");
+        let endpoint = llm_endpoint(base_url, "/v1/chat/completions");
 
         let mut messages = vec![json!({
             "role": "system",
@@ -1027,29 +1067,35 @@ async fn chat(
             messages.push(json!({ "role": role, "content": message.content.trim() }));
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "model": input.model.trim(),
             "messages": messages,
             "temperature": 0.4,
             "stream": stream
         });
+        apply_openai_compatible_provider_options(&mut payload, input.provider.as_deref());
 
-        let resp = state
-            .http
-            .post(endpoint)
-            .bearer_auth(input.api_key.trim())
+        let resp = with_llm_auth(
+            state.http.post(endpoint),
+            input.provider.as_deref(),
+            input.api_key.trim(),
+        )
             .json(&payload)
             .send()
             .await
-            .map_err(|err| ApiError::new(StatusCode::BAD_GATEWAY, format!("LLM 请求失败：{err}")))?;
+            .map_err(|err| {
+                let msg = format_reqwest_error(&err);
+                warn!("{msg}");
+                ApiError::new(StatusCode::BAD_GATEWAY, msg)
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("LLM 返回错误：{text}"),
-            ));
+            let value: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "message": text }));
+            let msg = format!("LLM 返回错误：{}", extract_llm_error(&value));
+            warn!("{msg} (HTTP {status}, 原始响应: {text})");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, msg));
         }
 
         if stream {
@@ -1076,7 +1122,8 @@ async fn chat(
                                     if let Ok(json) = serde_json::from_str::<Value>(data) {
                                         if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                                             if !content.is_empty() {
-                                                let _ = tx.send(Ok(Event::default().data(content))).await;
+                                                let payload = json!({ "choices": [{ "delta": { "content": content } }] }).to_string();
+                                                let _ = tx.send(Ok(Event::default().data(payload))).await;
                                             }
                                         }
                                     }
@@ -1212,6 +1259,90 @@ fn load_chat_session_item(conn: &Connection, id: i64) -> ApiResult<ChatSessionIt
     )
     .optional()?
     .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "会话不存在"))
+}
+
+fn extract_llm_error(value: &Value) -> String {
+    let raw = value
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("message").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| value.to_string());
+
+    if raw.trim_start().starts_with('<') {
+        if let Some(title) = raw.lines().find(|l| l.contains("<title>")).and_then(|l| {
+            l.trim().strip_prefix("<title>").and_then(|s| s.strip_suffix("</title>"))
+        }) {
+            return format!("服务商返回 HTML 错误页面：{title}，请检查 base_url 配置");
+        }
+        "服务商返回了 HTML 错误页面，请检查 base_url 配置".to_string()
+    } else {
+        raw
+    }
+}
+
+fn llm_endpoint(base_url: &str, default_path: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    let normalized_path = default_path.trim_start_matches('/');
+    let version_prefix = normalized_path
+        .split_once('/')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(normalized_path);
+
+    if base.rsplit('/').next() == Some(version_prefix) {
+        let suffix = normalized_path
+            .strip_prefix(version_prefix)
+            .unwrap_or("")
+            .trim_start_matches('/');
+        if suffix.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}/{suffix}")
+        }
+    } else {
+        format!("{base}/{normalized_path}")
+    }
+}
+
+fn format_reqwest_error(err: &reqwest::Error) -> String {
+    let mut parts = vec!["LLM 请求失败".to_string()];
+    if err.is_timeout() {
+        parts.push("原因：请求超时".to_string());
+    } else if err.is_connect() {
+        parts.push("原因：连接失败（网络不通、DNS 错误或服务器拒绝连接）".to_string());
+    } else if err.is_request() {
+        parts.push("原因：请求发送失败".to_string());
+    }
+    if let Some(url) = err.url() {
+        parts.push(format!("请求地址：{url}"));
+    }
+    parts.push(format!("reqwest 错误：{err}"));
+    let mut source = err.source();
+    while let Some(s) = source {
+        parts.push(format!("底层错误：{s}"));
+        source = s.source();
+    }
+    parts.join(" | ")
+}
+
+fn with_llm_auth(
+    request: reqwest::RequestBuilder,
+    provider: Option<&str>,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let request = request.bearer_auth(api_key);
+    if provider == Some("mimo") {
+        request.header("api-key", api_key)
+    } else {
+        request
+    }
+}
+
+fn apply_openai_compatible_provider_options(payload: &mut Value, provider: Option<&str>) {
+    if provider == Some("mimo") {
+        payload["thinking"] = json!({ "type": "disabled" });
+    }
 }
 
 fn kind_name_rust(kind: &str) -> &'static str {

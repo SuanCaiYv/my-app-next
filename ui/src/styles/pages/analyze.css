@@ -46,16 +46,37 @@
   gap: 16px;
 }
 
+.profile-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 82px);
+  gap: 10px;
+  align-items: end;
+}
+
+.profile-toolbar button {
+  min-height: 52px;
+  padding: 0 12px;
+  border-radius: 16px;
+}
+
 .settings-grid .wide-field {
   grid-column: 1 / -1;
 }
 
 .settings-grid input,
+.settings-grid textarea,
 .settings-grid .app-select-button {
   min-height: 52px;
   border-radius: 16px;
   padding-inline: 18px;
   font-weight: 650;
+}
+
+.settings-grid textarea {
+  min-height: 118px;
+  padding-block: 14px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .settings-note,

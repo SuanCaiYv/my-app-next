@@ -12,6 +12,8 @@ import {
 import type { PostItem, PhotoItem, ChatSessionSummary, ChatMessage } from "../types";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
+import { useConfirm } from "../hooks/useConfirm";
+import { currentModel, loadActiveLlmProfile } from "../llmSettings";
 
 function renderMarkdown(source: string) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
@@ -50,6 +52,7 @@ function contextLimitForModel(model: string) {
     if (!Number.isNaN(parsed) && parsed > 0) return parsed;
   }
   if (model.includes("gpt-4o") || model.includes("claude-3-5") || model.includes("claude-3-5-sonnet")) return 128000;
+  if (model.includes("mimo-v2")) return 262144;
   if (model.includes("gpt-4") || model.includes("claude-3")) return 8192;
   if (model.includes("gpt-3.5") || model.includes("qwen") || model.includes("glm")) return 4096;
   return 4096;
@@ -57,6 +60,16 @@ function contextLimitForModel(model: string) {
 
 function estimateTextTokens(text: string) {
   return Math.ceil(text.length / 3.5);
+}
+
+type PostPickerItem =
+  | { type: "year"; year: string }
+  | { type: "post"; post: PostItem };
+
+function postYear(post: PostItem) {
+  const date = new Date(post.updated_at || post.created_at);
+  if (Number.isNaN(date.getTime())) return "未注明年份";
+  return String(date.getFullYear());
 }
 
 const SYSTEM_PROMPT_TOKEN_ESTIMATE = 60;
@@ -84,20 +97,19 @@ export default function ChatPage() {
   const [freeText, setFreeText] = useState("");
   const [selectedPostIds, setSelectedPostIds] = useState<number[]>([]);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<number[]>([]);
-  const [apiKey] = useState(localStorage.getItem("apiKey") || "");
-  const [baseUrl] = useState(localStorage.getItem("baseUrl") || "");
-  const [modelPreset] = useState(localStorage.getItem("modelPreset") || "");
-  const [customModel] = useState(localStorage.getItem("customModel") || "");
-  const [llmProvider] = useState(localStorage.getItem("llmProvider") || "");
+  const [sentPostIds, setSentPostIds] = useState<number[]>([]);
+  const [sentPhotoIds, setSentPhotoIds] = useState<number[]>([]);
+  const [llmProfile] = useState(() => loadActiveLlmProfile());
   const [chatUsage, setChatUsage] = useState({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
   const { show: showToast, element: toastElement } = useToast();
+  const { confirm: confirmDialog, element: confirmElement } = useConfirm();
   const [postsExpanded, setPostsExpanded] = useState(false);
   const [photosExpanded, setPhotosExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const model = modelPreset === "custom" ? customModel : modelPreset;
+  const model = currentModel(llmProfile);
 
   useEffect(() => {
     listPosts().then(setPosts).catch(() => {});
@@ -108,7 +120,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      const container = document.querySelector(".chat-messages") as HTMLElement | null;
+      if (container) {
+        const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+        if (nearBottom) {
+          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+        }
+      }
     }
   }, [messages]);
 
@@ -116,18 +134,13 @@ export default function ChatPage() {
     try { setSessions(await listChatSessions()); } catch {}
   };
 
-  const persistLlmSettings = () => {
-    localStorage.setItem("apiKey", apiKey);
-    localStorage.setItem("baseUrl", baseUrl);
-    localStorage.setItem("modelPreset", modelPreset);
-    localStorage.setItem("customModel", customModel);
-  };
-
   const handleNewSession = () => {
     setCurrentSessionId(null);
     setMessages([]);
     setSelectedPostIds([]);
     setSelectedPhotoIds([]);
+    setSentPostIds([]);
+    setSentPhotoIds([]);
     setFreeText("");
     setChatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
     pinChatShell();
@@ -137,19 +150,24 @@ export default function ChatPage() {
     try {
       const session = await getChatSession(id);
       setCurrentSessionId(session.id);
-      setMessages(JSON.parse(session.messages || "[]"));
-      setSelectedPostIds(JSON.parse(session.context_post_ids || "[]"));
-      setSelectedPhotoIds(JSON.parse(session.context_photo_ids || "[]"));
+      const nextMessages = JSON.parse(session.messages || "[]");
+      const nextPostIds = JSON.parse(session.context_post_ids || "[]");
+      const nextPhotoIds = JSON.parse(session.context_photo_ids || "[]");
+      setMessages(nextMessages);
+      setSelectedPostIds(nextPostIds);
+      setSelectedPhotoIds(nextPhotoIds);
+      setSentPostIds(nextMessages.length > 0 ? nextPostIds : []);
+      setSentPhotoIds(nextMessages.length > 0 ? nextPhotoIds : []);
       setFreeText(session.context_free_text || "");
       setChatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
       pinChatShell();
     } catch (err: any) { showToast(err.message); }
   };
 
-  const handleSaveSession = async (msgs: ChatMessage[]) => {
+  const handleSaveSession = async (msgs: ChatMessage[], contextPostIdsForSave = selectedPostIds, contextPhotoIdsForSave = selectedPhotoIds) => {
     const messagesJson = JSON.stringify(msgs);
-    const contextPostIds = JSON.stringify(selectedPostIds);
-    const contextPhotoIds = JSON.stringify(selectedPhotoIds);
+    const contextPostIds = JSON.stringify(contextPostIdsForSave);
+    const contextPhotoIds = JSON.stringify(contextPhotoIdsForSave);
     const firstUser = msgs.find((m) => m.role === "user");
     const title = sessions.find((s) => s.id === currentSessionId)?.title || (firstUser ? firstUser.content.slice(0, 20) : "新对话");
     try {
@@ -167,10 +185,11 @@ export default function ChatPage() {
   const handleSend = async () => {
     const content = input.trim();
     if (!content) { showToast("请输入对话内容"); return; }
-    if (!apiKey.trim() || !model.trim()) { showToast("先在 LLM 设置里填写 API Key 和模型"); return; }
-    persistLlmSettings();
+    if (!llmProfile.apiKey.trim() || !model.trim()) { showToast("先在 LLM 设置里填写 API Key 和模型"); return; }
 
     const newMsgs: ChatMessage[] = [...messages, { role: "user", content }];
+    const outgoingPostIds = [...selectedPostIds];
+    const outgoingPhotoIds = [...selectedPhotoIds];
     setMessages(newMsgs);
     setInput("");
     setChatting(true);
@@ -179,12 +198,12 @@ export default function ChatPage() {
 
     try {
       await chatStream({
-        api_key: apiKey,
-        base_url: baseUrl,
+        api_key: llmProfile.apiKey,
+        base_url: llmProfile.baseUrl,
         model,
-        provider: llmProvider || undefined,
-        post_ids: selectedPostIds,
-        photo_ids: selectedPhotoIds,
+        provider: llmProfile.providerId || undefined,
+        post_ids: outgoingPostIds,
+        photo_ids: outgoingPhotoIds,
         free_text: freeText || undefined,
         messages: newMsgs,
       }, (delta) => {
@@ -201,9 +220,15 @@ export default function ChatPage() {
       });
 
       const assistantMsgs: ChatMessage[] = [...newMsgs, { role: "assistant", content: assistantContent }];
+      const nextSentPostIds = Array.from(new Set([...sentPostIds, ...outgoingPostIds]));
+      const nextSentPhotoIds = Array.from(new Set([...sentPhotoIds, ...outgoingPhotoIds]));
       setMessages(assistantMsgs);
+      setSelectedPostIds((prev) => Array.from(new Set([...prev, ...outgoingPostIds])));
+      setSelectedPhotoIds((prev) => Array.from(new Set([...prev, ...outgoingPhotoIds])));
+      setSentPostIds(nextSentPostIds);
+      setSentPhotoIds(nextSentPhotoIds);
       setChatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model });
-      await handleSaveSession(assistantMsgs);
+      await handleSaveSession(assistantMsgs, nextSentPostIds, nextSentPhotoIds);
     } catch (err: any) {
       showToast(err.message);
       setMessages((prev) => {
@@ -229,7 +254,8 @@ export default function ChatPage() {
   };
 
   const handleDeleteSession = async () => {
-    if (!currentSessionId || !confirm("确定删除这个会话？")) return;
+    if (!currentSessionId) return;
+    if (!(await confirmDialog("确定删除这个会话？"))) return;
     try {
       await deleteChatSession(currentSessionId);
       setSessions((prev) => prev.filter((s) => s.id !== currentSessionId));
@@ -269,8 +295,41 @@ export default function ChatPage() {
     if (freeText) parts.push("📝 指定片段");
     return parts;
   }, [selectedPostIds, selectedPhotoIds, posts, photos, freeText]);
+  const groupedPostPickerItems = useMemo<PostPickerItem[]>(() => {
+    const items: PostPickerItem[] = [];
+    let currentYear = "";
+    for (const post of posts) {
+      const year = postYear(post);
+      if (year !== currentYear) {
+        items.push({ type: "year", year });
+        currentYear = year;
+      }
+      items.push({ type: "post", post });
+    }
+    return items;
+  }, [posts]);
   const allPostsSelected = posts.length > 0 && posts.every((post) => selectedPostIds.includes(post.id));
   const allPhotosSelected = photos.length > 0 && photos.every((photo) => selectedPhotoIds.includes(photo.id));
+  const togglePostSelection = (postId: number, checked: boolean) => {
+    if (!checked && sentPostIds.includes(postId)) return;
+    setSelectedPostIds((prev) => checked ? Array.from(new Set([...prev, postId])) : prev.filter((id) => id !== postId));
+  };
+  const togglePhotoSelection = (photoId: number, checked: boolean) => {
+    if (!checked && sentPhotoIds.includes(photoId)) return;
+    setSelectedPhotoIds((prev) => checked ? Array.from(new Set([...prev, photoId])) : prev.filter((id) => id !== photoId));
+  };
+  const toggleAllPosts = () => {
+    setSelectedPostIds((prev) => {
+      const sent = prev.filter((id) => sentPostIds.includes(id));
+      return allPostsSelected ? sent : Array.from(new Set([...sent, ...posts.map((p) => p.id)]));
+    });
+  };
+  const toggleAllPhotos = () => {
+    setSelectedPhotoIds((prev) => {
+      const sent = prev.filter((id) => sentPhotoIds.includes(id));
+      return allPhotosSelected ? sent : Array.from(new Set([...sent, ...photos.map((p) => p.id)]));
+    });
+  };
 
   return (
     <section className="view active" id="chatView">
@@ -290,7 +349,7 @@ export default function ChatPage() {
                   type="button"
                   className="small-button"
                   disabled={posts.length === 0}
-                  onClick={() => setSelectedPostIds(allPostsSelected ? [] : posts.map((p) => p.id))}
+                  onClick={toggleAllPosts}
                 >
                   {allPostsSelected ? "清空" : "全选"}
                 </button>
@@ -301,13 +360,24 @@ export default function ChatPage() {
             </div>
             <div className={`check-list chat-check-list ${postsExpanded ? "expanded" : ""}`}>
               {posts.length === 0 && <div className="empty compact">暂无文字</div>}
-              {posts.map((post) => (
-                <label key={post.id} className="check-item">
-                  <input type="checkbox" checked={selectedPostIds.includes(post.id)} onChange={(e) => {
-                    setSelectedPostIds((prev) => e.target.checked ? [...prev, post.id] : prev.filter((id) => id !== post.id));
-                  }} />
-                  <span>{kindName(post.kind)} · {post.title}</span>
-                </label>
+              {groupedPostPickerItems.map((item) => (
+                item.type === "year" ? (
+                  <div key={`year-${item.year}`} className="check-year-divider" aria-hidden="true">
+                    {item.year}
+                  </div>
+                ) : (
+                  <label key={item.post.id} className="check-item">
+                    <input
+                      type="checkbox"
+                      checked={selectedPostIds.includes(item.post.id)}
+                      disabled={sentPostIds.includes(item.post.id)}
+                      onChange={(e) => {
+                        togglePostSelection(item.post.id, e.target.checked);
+                      }}
+                    />
+                    <span>{kindName(item.post.kind)} · {item.post.title}</span>
+                  </label>
+                )
               ))}
             </div>
           </div>
@@ -320,7 +390,7 @@ export default function ChatPage() {
                   type="button"
                   className="small-button"
                   disabled={photos.length === 0}
-                  onClick={() => setSelectedPhotoIds(allPhotosSelected ? [] : photos.map((p) => p.id))}
+                  onClick={toggleAllPhotos}
                 >
                   {allPhotosSelected ? "清空" : "全选"}
                 </button>
@@ -333,9 +403,14 @@ export default function ChatPage() {
               {photos.length === 0 && <div className="empty compact">暂无照片</div>}
               {photos.map((photo) => (
                 <label key={photo.id} className="check-item">
-                  <input type="checkbox" checked={selectedPhotoIds.includes(photo.id)} onChange={(e) => {
-                    setSelectedPhotoIds((prev) => e.target.checked ? [...prev, photo.id] : prev.filter((id) => id !== photo.id));
-                  }} />
+                  <input
+                    type="checkbox"
+                    checked={selectedPhotoIds.includes(photo.id)}
+                    disabled={sentPhotoIds.includes(photo.id)}
+                    onChange={(e) => {
+                      togglePhotoSelection(photo.id, e.target.checked);
+                    }}
+                  />
                   <img src={photo.thumbnail_url || photo.url} alt="" className="check-thumb" loading="lazy" />
                   <span>{photo.title || photo.original_name}</span>
                 </label>
@@ -373,7 +448,7 @@ export default function ChatPage() {
                 </div>
               </article>
             ))}
-            {chatting && (
+            {chatting && !(messages.length > 0 && messages[messages.length - 1].role === "assistant" && messages[messages.length - 1].content.trim().length > 0) && (
               <article className="chat-message assistant">
                 <div className="chat-avatar">AI</div>
                 <div className="chat-bubble loading">正在输入...</div>
@@ -428,6 +503,7 @@ export default function ChatPage() {
         </dialog>
       )}
 
+      {confirmElement}
       {toastElement}
     </section>
   );

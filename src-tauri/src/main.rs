@@ -24,16 +24,18 @@ fn static_dir(_app: &tauri::App) -> anyhow::Result<PathBuf> {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            personal_studio::init_tracing();
+            let app_data_dir = app.path().app_data_dir()?;
+            let log_path = personal_studio::init_tracing_with_file(app_data_dir.join("logs"))?;
+            tracing::info!("Rust backend log file: {}", log_path.display());
 
-            let data_dir = app.path().app_data_dir()?.join("data");
+            let data_dir = app_data_dir.join("data");
             let static_dir = static_dir(app)?;
             let addr: SocketAddr = "127.0.0.1:34867".parse()?;
 
             thread::spawn(move || {
                 let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
                 if let Err(error) = runtime.block_on(personal_studio::run_server(data_dir, static_dir, addr)) {
-                    eprintln!("failed to run local server: {error:?}");
+                    tracing::error!("failed to run local server: {error:?}");
                 }
             });
 
@@ -52,6 +54,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+                builder = builder.traffic_light_position(tauri::LogicalPosition::new(18.0, 18.0));
                 builder = builder.hidden_title(true);
             }
 

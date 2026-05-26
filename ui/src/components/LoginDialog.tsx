@@ -27,7 +27,7 @@ export default function LoginDialog({ open, onClose }: { open: boolean; onClose:
     try {
       const data = await login(password);
       doLogin(data.token);
-      closeDialog();
+      window.location.reload();
     } catch (err: unknown) {
       setPassword("");
       setError(err instanceof Error ? err.message : "登录失败");
