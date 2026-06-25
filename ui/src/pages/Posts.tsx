@@ -949,7 +949,7 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
               onChange={(e) => setLocationInput(e.target.value)}
               onKeyDown={handleLocationKeyDown}
               onBlur={handleLocationBlur}
-              placeholder={locations.length === 0 ? "添加地点" : ""}
+              placeholder="添加地点"
             />
           </div>
         </div>
@@ -969,7 +969,7 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
             {tagItems.map((tag) => (
               <span key={tag} className="editor-tag-pill">
                 {tag}
-                <button type="button" onClick={() => removeTag(tag)} aria-label={`删除 ${tag}`}>×</button>
+                <button type="button" className="plain" onClick={() => removeTag(tag)} aria-label={`删除 ${tag}`}>×</button>
               </span>
             ))}
             <input
