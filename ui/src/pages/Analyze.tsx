@@ -1,11 +1,15 @@
 import { useMemo, useState } from "react";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
+import { testLlmConnection } from "../api";
 import {
   createLlmProfile,
   currentModel,
+  DEFAULT_LOCATION_PROMPT,
+  DEFAULT_TAGS_PROMPT,
   DEFAULT_TITLE_PROMPT,
   loadLlmProfiles,
+  requestProvider,
   saveLlmProfiles,
   type LlmProfile,
 } from "../llmSettings";
@@ -16,6 +20,7 @@ type ProviderPreset = {
   baseUrl: string;
   models: { value: string; label: string }[];
   note: string;
+  apiFormat?: "openai" | "anthropic";
 };
 
 const providers: ProviderPreset[] = [
@@ -36,11 +41,12 @@ const providers: ProviderPreset[] = [
     name: "Anthropic (Claude)",
     baseUrl: "https://api.anthropic.com",
     models: [
-      { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-      { value: "claude-haiku-4-20250514", label: "Claude Haiku 4" },
-      { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+      { value: "claude-opus-4-1", label: "Claude Opus 4.1" },
     ],
     note: "Anthropic 原生 Messages API；会自动使用 x-api-key 和 anthropic-version 请求头。",
+    apiFormat: "anthropic",
   },
   {
     id: "openrouter",
@@ -96,8 +102,6 @@ const providers: ProviderPreset[] = [
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
     models: [
-      { value: "deepseek-v4-flash", label: "deepseek-v4-flash" },
-      { value: "deepseek-v4-pro", label: "deepseek-v4-pro" },
       { value: "deepseek-chat", label: "deepseek-chat" },
       { value: "deepseek-reasoner", label: "deepseek-reasoner" },
     ],
@@ -127,11 +131,115 @@ const providers: ProviderPreset[] = [
     note: "MiMo OpenAI-compatible Chat Completions；默认使用小米官方平台 endpoint。",
   },
   {
+    id: "zhipu",
+    name: "智谱 GLM",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    models: [
+      { value: "glm-4.5", label: "glm-4.5" },
+      { value: "glm-4.5-air", label: "glm-4.5-air" },
+    ],
+    note: "智谱开放平台 OpenAI 兼容接口。",
+  },
+  {
+    id: "baidu",
+    name: "百度千帆",
+    baseUrl: "https://qianfan.baidubce.com/v2",
+    models: [],
+    note: "百度千帆 OpenAI 兼容接口；模型名称按控制台填写。",
+  },
+  {
+    id: "doubao",
+    name: "豆包 / 火山方舟",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    models: [],
+    note: "火山方舟 OpenAI 兼容接口；模型处填写推理接入点 ID。",
+  },
+  {
+    id: "minimax",
+    name: "MiniMax",
+    baseUrl: "https://api.minimax.io/v1",
+    models: [],
+    note: "MiniMax OpenAI 兼容接口；模型名称可按账号区域和控制台覆盖。",
+  },
+  {
+    id: "siliconflow",
+    name: "硅基流动 SiliconFlow",
+    baseUrl: "https://api.siliconflow.cn/v1",
+    models: [],
+    note: "硅基流动 OpenAI 兼容接口，支持多个开源模型。",
+  },
+  {
+    id: "groq",
+    name: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    models: [{ value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" }],
+    note: "Groq OpenAI 兼容接口。",
+  },
+  {
+    id: "xai",
+    name: "xAI",
+    baseUrl: "https://api.x.ai/v1",
+    models: [],
+    note: "xAI OpenAI 兼容接口；模型名称按控制台填写。",
+  },
+  {
+    id: "together",
+    name: "Together AI",
+    baseUrl: "https://api.together.xyz/v1",
+    models: [],
+    note: "Together AI OpenAI 兼容接口。",
+  },
+  {
+    id: "nvidia",
+    name: "NVIDIA NIM",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    models: [],
+    note: "NVIDIA NIM OpenAI 兼容接口。",
+  },
+  {
+    id: "modelscope",
+    name: "ModelScope 魔搭",
+    baseUrl: "https://api-inference.modelscope.cn/v1",
+    models: [],
+    note: "ModelScope 推理服务 OpenAI 兼容接口。",
+  },
+  {
+    id: "cohere",
+    name: "Cohere",
+    baseUrl: "https://api.cohere.ai/compatibility/v1",
+    models: [{ value: "command-a-03-2025", label: "Command A" }],
+    note: "Cohere OpenAI 兼容接口。",
+  },
+  {
+    id: "perplexity",
+    name: "Perplexity",
+    baseUrl: "https://api.perplexity.ai/chat/completions",
+    models: [
+      { value: "sonar", label: "Sonar" },
+      { value: "sonar-pro", label: "Sonar Pro" },
+    ],
+    note: "Perplexity OpenAI 兼容接口，预设使用完整 Chat Completions 地址。",
+  },
+  {
+    id: "fireworks",
+    name: "Fireworks AI",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    models: [],
+    note: "Fireworks AI OpenAI 兼容接口。",
+  },
+  {
+    id: "ollama",
+    name: "Ollama（本地）",
+    baseUrl: "http://localhost:11434/v1",
+    models: [],
+    note: "Ollama OpenAI 兼容接口；API Key 可以留空。",
+  },
+  {
     id: "custom",
-    name: "自定义兼容接口",
+    name: "OpenAI 兼容（自定义）",
     baseUrl: "",
     models: [{ value: "custom", label: "自定义模型" }],
-    note: "适合 Ollama、LM Studio、vLLM、LiteLLM、One API 等 OpenAI-compatible 服务。",
+    note: "可填写服务根地址或完整 /chat/completions 地址，适合 LM Studio、vLLM、LiteLLM、One API 等服务。",
   },
 ];
 
@@ -152,6 +260,12 @@ export default function AnalyzePage() {
   const initialSettings = useMemo(() => loadLlmProfiles(), []);
   const [profiles, setProfiles] = useState<LlmProfile[]>(initialSettings.profiles);
   const [activeId, setActiveId] = useState(initialSettings.activeId);
+  const [amapKey, setAmapKey] = useState(() => localStorage.getItem("amapKey") || "");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    state: "success" | "error";
+    message: string;
+  } | null>(null);
   const { show: showToast, element: toastElement } = useToast();
 
   const activeProfile = profiles.find((item) => item.id === activeId) || profiles[0];
@@ -173,9 +287,10 @@ export default function AnalyzePage() {
     const nextProvider = providers.find((item) => item.id === nextProviderId) || providers[0];
     updateActiveProfile({
       providerId: nextProvider.id,
+      apiFormat: nextProvider.apiFormat || "openai",
       baseUrl: nextProvider.baseUrl,
-      modelPreset: nextProvider.models[0]?.value || "",
-      customModel: nextProvider.id === "custom" ? activeProfile.customModel : "",
+      modelPreset: nextProvider.models[0]?.value || "custom",
+      customModel: nextProvider.models.length === 0 || nextProvider.id === "custom" ? activeProfile.customModel : "",
     });
   };
 
@@ -184,6 +299,7 @@ export default function AnalyzePage() {
     const nextProfile = createLlmProfile({
       name: `配置 ${profiles.length + 1}`,
       providerId: nextProvider.id,
+      apiFormat: nextProvider.apiFormat || "openai",
       baseUrl: nextProvider.baseUrl,
       modelPreset: nextProvider.models[0]?.value || "",
     });
@@ -231,10 +347,39 @@ export default function AnalyzePage() {
     ));
     setProfiles(normalizedProfiles);
     saveLlmProfiles(normalizedProfiles, activeProfile.id);
-    showToast("LLM 配置已保存并切换");
+    localStorage.setItem("amapKey", amapKey);
+    showToast("配置已保存并切换");
   };
 
   const model = currentModel(activeProfile);
+
+  const handleTest = async () => {
+    if (!model.trim()) {
+      showToast("请选择或填写模型");
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testLlmConnection({
+        api_key: activeProfile.apiKey,
+        base_url: activeProfile.baseUrl || undefined,
+        model,
+        provider: requestProvider(activeProfile),
+      });
+      setTestResult({
+        state: "success",
+        message: `连接成功 · ${result.elapsed_ms} ms · 回复：${result.answer}`,
+      });
+    } catch (error: unknown) {
+      setTestResult({
+        state: "error",
+        message: error instanceof Error ? error.message : "连接测试失败",
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <section className="view active" id="analyzeView">
@@ -245,7 +390,12 @@ export default function AnalyzePage() {
               <h2>LLM 配置</h2>
               <p>保存多套模型配置，并选择当前用于对话、标题生成和分析的配置。</p>
             </div>
-            <button className="primary" onClick={handleSave}>保存设置</button>
+            <div className="settings-head-actions">
+              <button className="secondary" disabled={testing} onClick={handleTest}>
+                {testing ? "测试中..." : "测试连接"}
+              </button>
+              <button className="primary" onClick={handleSave}>保存设置</button>
+            </div>
           </header>
 
           <div className="profile-toolbar">
@@ -284,7 +434,20 @@ export default function AnalyzePage() {
             </div>
 
             <div className="field">
-              <label>API Key</label>
+              <label>接口格式</label>
+              <Select
+                value={activeProfile.apiFormat}
+                ariaLabel="接口格式"
+                onChange={(value) => updateActiveProfile({ apiFormat: value as LlmProfile["apiFormat"] })}
+                options={[
+                  { value: "openai", label: "OpenAI 兼容" },
+                  { value: "anthropic", label: "Anthropic 原生" },
+                ]}
+              />
+            </div>
+
+            <div className="field">
+              <label>API Key（本地服务可选）</label>
               <input
                 placeholder="填入当前服务商的 API Key"
                 value={activeProfile.apiKey}
@@ -294,9 +457,9 @@ export default function AnalyzePage() {
             </div>
 
             <div className="field wide-field">
-              <label>Base URL</label>
+              <label>Base URL / Endpoint</label>
               <input
-                placeholder="OpenAI-compatible Base URL"
+                placeholder="服务根地址或完整 /chat/completions 地址"
                 value={activeProfile.baseUrl}
                 onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
               />
@@ -338,10 +501,56 @@ export default function AnalyzePage() {
             <div className="field wide-field">
               <label>生成标题提示词</label>
               <textarea
-                className="title-prompt-input"
-                placeholder={DEFAULT_TITLE_PROMPT}
-                value={activeProfile.titlePrompt}
+                className={`title-prompt-input ${!activeProfile.titlePrompt ? "is-placeholder" : ""}`}
+                value={activeProfile.titlePrompt || DEFAULT_TITLE_PROMPT}
+                onFocus={(e) => { if (!activeProfile.titlePrompt) e.currentTarget.select(); }}
                 onChange={(e) => updateActiveProfile({ titlePrompt: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === DEFAULT_TITLE_PROMPT.trim()) {
+                    updateActiveProfile({ titlePrompt: "" });
+                  }
+                }}
+              />
+            </div>
+
+            <div className="field wide-field">
+              <label>生成标签提示词</label>
+              <textarea
+                className={`tags-prompt-input ${!activeProfile.tagsPrompt ? "is-placeholder" : ""}`}
+                value={activeProfile.tagsPrompt || DEFAULT_TAGS_PROMPT}
+                onFocus={(e) => { if (!activeProfile.tagsPrompt) e.currentTarget.select(); }}
+                onChange={(e) => updateActiveProfile({ tagsPrompt: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === DEFAULT_TAGS_PROMPT.trim()) {
+                    updateActiveProfile({ tagsPrompt: "" });
+                  }
+                }}
+              />
+            </div>
+
+            <div className="field wide-field">
+              <label>提取地点提示词</label>
+              <textarea
+                className={`location-prompt-input ${!activeProfile.locationPrompt ? "is-placeholder" : ""}`}
+                value={activeProfile.locationPrompt || DEFAULT_LOCATION_PROMPT}
+                onFocus={(e) => { if (!activeProfile.locationPrompt) e.currentTarget.select(); }}
+                onChange={(e) => updateActiveProfile({ locationPrompt: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === DEFAULT_LOCATION_PROMPT.trim()) {
+                    updateActiveProfile({ locationPrompt: "" });
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="settings-grid">
+            <div className="field wide-field">
+              <label>高德地图 Key</label>
+              <input
+                value={amapKey}
+                onChange={(e) => setAmapKey(e.target.value)}
+                placeholder="用于地图瓦片和地点地理编码"
               />
             </div>
           </div>
@@ -350,6 +559,13 @@ export default function AnalyzePage() {
             <strong>{provider.name}</strong>
             <span>{provider.note}</span>
           </div>
+
+          {testResult && (
+            <div className={`llm-test-result ${testResult.state}`} role="status">
+              <strong>{testResult.state === "success" ? "模型可用" : "连接失败"}</strong>
+              <span>{testResult.message}</span>
+            </div>
+          )}
 
           <div className="settings-summary">
             <span>当前启用</span>

@@ -1,11 +1,13 @@
 import { useEffect, useImperativeHandle, useMemo, useState, useCallback, useRef, forwardRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { listPosts, createPost, updatePost, deletePost, analyze } from "../api";
-import type { PostItem } from "../types";
+import { useLoading } from "../context/LoadingContext";
+import { listPosts, createPost, updatePost, deletePost, analyze, extractLocations, listPostLocations, addPostLocation, removePostLocation } from "../api";
+import type { LocationItem, PostItem } from "../types";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
-import { currentModel, DEFAULT_TITLE_PROMPT, loadActiveLlmProfile } from "../llmSettings";
+import { currentModel, DEFAULT_LOCATION_PROMPT, DEFAULT_TAGS_PROMPT, DEFAULT_TITLE_PROMPT, loadActiveLlmProfile, requestProvider } from "../llmSettings";
+import { formatDateTimeText, parseDateTimeText } from "../utils/dateTime";
 
 function kindName(kind: string) {
   return { article: "文章", thought: "想法", note: "随手写" }[kind] || kind;
@@ -24,35 +26,69 @@ function tagList(tags: string) {
     .filter(Boolean);
 }
 
+// ── Tag / Category color palette ──────────────────────────────
+const TAG_PALETTE = [
+  { bg: "#e8e0f0", border: "#c4b5d9", text: "#5c4a7a" }, // lavender
+  { bg: "#dce8ef", border: "#b3cdd9", text: "#3e6577" }, // steel blue
+  { bg: "#e6ede4", border: "#bfcfb8", text: "#4a6343" }, // sage
+  { bg: "#f0e4d8", border: "#d9c4a8", text: "#7a5e3a" }, // sand
+  { bg: "#e0e8ec", border: "#b8ccd4", text: "#46606a" }, // slate
+  { bg: "#ece4dc", border: "#d4c4b4", text: "#6a5a4a" }, // warm gray
+  { bg: "#e4e8e0", border: "#c0c8b8", text: "#525e4a" }, // olive mist
+  { bg: "#e8e4ec", border: "#ccc0d4", text: "#5e526a" }, // mauve
+  { bg: "#dce4e8", border: "#b4c4cc", text: "#4a5e66" }, // denim
+  { bg: "#ece0e0", border: "#d4b8b8", text: "#6a4a4a" }, // rose ash
+  { bg: "#e0ece4", border: "#b8d4c0", text: "#4a6652" }, // mint
+  { bg: "#e8e8dc", border: "#d0d0b4", text: "#5e5e44" }, // flax
+  { bg: "#dce0ec", border: "#b4bcd4", text: "#4a5066" }, // periwinkle
+  { bg: "#ece8e0", border: "#d4ccb4", text: "#665e44" }, // wheat
+  { bg: "#e0e0ec", border: "#b8b8d4", text: "#505066" }, // iris
+  { bg: "#e4ece0", border: "#c0d4b8", text: "#52664a" }, // fern
+  { bg: "#ece0e8", border: "#d4b8cc", text: "#664a5e" }, // heather
+  { bg: "#e0ece8", border: "#b8d4cc", text: "#4a665e" }, // teal mist
+  { bg: "#e8e0e0", border: "#d0b8b8", text: "#5e4a4a" }, // ash rose
+  { bg: "#e0e4ec", border: "#b8c0d4", text: "#4a5266" }, // cornflower
+  { bg: "#ece4e8", border: "#d4c0cc", text: "#66525e" }, // thistle
+  { bg: "#e4e0ec", border: "#c0b8d4", text: "#524a66" }, // wisteria
+  { bg: "#e8ece0", border: "#ccd4b8", text: "#5e664a" }, // moss
+  { bg: "#e0e8e4", border: "#b8d0c0", text: "#4a5e52" }, // jade mist
+  { bg: "#ecece0", border: "#d4d4b4", text: "#666644" }, // oat
+  { bg: "#e4e0e8", border: "#c0b8d0", text: "#524a5e" }, // plum mist
+  { bg: "#e0ece0", border: "#b8d4b8", text: "#4a664a" }, // celadon
+  { bg: "#e8e4e0", border: "#d0c0b4", text: "#5e524a" }, // stone
+  { bg: "#e4ece8", border: "#c0d4cc", text: "#52665e" }, // seafoam
+  { bg: "#ece4e4", border: "#d4c0c0", text: "#665252" }, // blush
+];
+
+let tagColorMap: Record<string, (typeof TAG_PALETTE)[number]> = {};
+try { tagColorMap = JSON.parse(localStorage.getItem("tagColorMap") || "{}"); } catch {}
+
+function saveTagColorMap() {
+  localStorage.setItem("tagColorMap", JSON.stringify(tagColorMap));
+}
+
+function hashStr(s: string) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function getTagColor(name: string) {
+  const key = name.trim().toLowerCase();
+  if (!key) return TAG_PALETTE[0];
+  if (tagColorMap[key]) return tagColorMap[key];
+  const idx = hashStr(key) % TAG_PALETTE.length;
+  tagColorMap[key] = TAG_PALETTE[idx];
+  saveTagColorMap();
+  return tagColorMap[key];
+}
+
 function normalizeCategory(value: string) {
   return value.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean)[0] || "";
 }
 
 function normalizeTags(value: string) {
   return Array.from(new Set(tagList(value))).join(", ");
-}
-
-function formatDateTimeText(value: string) {
-  const d = new Date(value);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function parseDateTimeText(value: string) {
-  const normalized = value
-    .trim()
-    .replace(/[年月]/g, "-")
-    .replace(/日/g, " ")
-    .replace(/[./]/g, "-")
-    .replace(/T/g, " ")
-    .replace(/\s+/g, " ");
-  const parts = normalized.match(/\d+/g)?.map(Number) || [];
-  if (parts.length < 3) return null;
-  const [year, month, day, hour = 0, minute = 0, second = 0] = parts;
-  if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null;
-  const date = new Date(year, month - 1, day, hour, minute, second);
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
-  return date;
 }
 
 type ScrollSnapshot = {
@@ -66,12 +102,20 @@ export default function PostsPage({
   search,
   categoryFilter,
   kindFilter,
+  tagFilter,
+  onCategoryFilterChange,
+  onKindFilterChange,
+  onTagFilterChange,
   newPostTrigger,
   operationCard,
 }: {
   search: string;
   categoryFilter: string;
   kindFilter: string;
+  tagFilter: string;
+  onCategoryFilterChange?: (value: string) => void;
+  onKindFilterChange?: (value: string) => void;
+  onTagFilterChange?: (value: string) => void;
   newPostTrigger?: number;
   operationCard?: React.ReactNode;
 }) {
@@ -138,9 +182,16 @@ export default function PostsPage({
     const q = search.trim().toLowerCase();
     return posts.filter((p) => {
       const hay = `${p.title} ${p.body} ${p.category} ${p.tags}`.toLowerCase();
-      return (!q || hay.includes(q)) && (!categoryFilter || p.category === categoryFilter) && (!kindFilter || p.kind === kindFilter);
+      const tags = tagList(p.tags);
+      return (!q || hay.includes(q)) && (!categoryFilter || p.category === categoryFilter) && (!kindFilter || p.kind === kindFilter) && (!tagFilter || tags.includes(tagFilter));
     });
-  }, [posts, search, categoryFilter, kindFilter]);
+  }, [posts, search, categoryFilter, kindFilter, tagFilter]);
+
+  const existingTags = useMemo(() => {
+    const set = new Set<string>();
+    posts.forEach((p) => tagList(p.tags).forEach((t) => set.add(t)));
+    return Array.from(set);
+  }, [posts]);
 
 
   const handleSave = async (post: Partial<PostItem> & { updated_at?: string }) => {
@@ -200,11 +251,41 @@ export default function PostsPage({
     }
   };
 
-  const handleGenerateTitle = async (body: string, category: string, tags: string) => {
+  const handleExtractLocations = async (postId: number) => {
     const llmProfile = loadActiveLlmProfile();
     const model = currentModel(llmProfile);
-    if (!llmProfile.apiKey.trim() || !model.trim()) {
-      showToast("先在 LLM 分析页填写 API Key 和模型");
+    if (!model.trim()) {
+      showToast("先在 LLM 分析页填写模型");
+      return [];
+    }
+    const amapKey = localStorage.getItem("amapKey") || "";
+    if (!amapKey.trim()) {
+      showToast("先在设置页填写高德 Key");
+      return [];
+    }
+    try {
+      const locations = await extractLocations({
+        post_id: postId,
+        amap_key: amapKey,
+        api_key: llmProfile.apiKey,
+        base_url: llmProfile.baseUrl || undefined,
+        model,
+        provider: requestProvider(llmProfile),
+        prompt: llmProfile.locationPrompt.trim() || DEFAULT_LOCATION_PROMPT,
+      });
+      showToast(`提取到 ${locations.length} 个地点`);
+      return locations;
+    } catch (err: any) {
+      showToast(err.message);
+      return [];
+    }
+  };
+
+  const handleGenerateTags = async (body: string, category: string, title: string) => {
+    const llmProfile = loadActiveLlmProfile();
+    const model = currentModel(llmProfile);
+    if (!model.trim()) {
+      showToast("先在 LLM 分析页填写模型");
       return "";
     }
     try {
@@ -212,7 +293,37 @@ export default function PostsPage({
         api_key: llmProfile.apiKey,
         base_url: llmProfile.baseUrl || undefined,
         model,
-        provider: llmProfile.providerId || undefined,
+        provider: requestProvider(llmProfile),
+        prompt: llmProfile.tagsPrompt.trim() || DEFAULT_TAGS_PROMPT,
+        free_text: `标题：${title || "无标题"}\n分类：${category || "未分类"}\n已有标签：${existingTags.join("、") || "无"}\n正文：\n${body}`,
+        post_ids: [],
+        photo_ids: [],
+        save: false,
+      });
+      const tags = data.answer
+        .split(/[,，、\n]+/)
+        .map((t) => t.trim().replace(/^["'""''《》]+|["'""''《》]+$/g, ""))
+        .filter(Boolean);
+      return Array.from(new Set(tags)).join(", ");
+    } catch (err: any) {
+      showToast(err.message);
+      return "";
+    }
+  };
+
+  const handleGenerateTitle = async (body: string, category: string, tags: string) => {
+    const llmProfile = loadActiveLlmProfile();
+    const model = currentModel(llmProfile);
+    if (!model.trim()) {
+      showToast("先在 LLM 分析页填写模型");
+      return "";
+    }
+    try {
+      const data = await analyze({
+        api_key: llmProfile.apiKey,
+        base_url: llmProfile.baseUrl || undefined,
+        model,
+        provider: requestProvider(llmProfile),
         prompt: llmProfile.titlePrompt.trim() || DEFAULT_TITLE_PROMPT,
         free_text: `分类：${category || "未分类"}\n标签：${tags || "无"}\n正文：\n${body}`,
         post_ids: [],
@@ -224,6 +335,16 @@ export default function PostsPage({
       showToast(err.message);
       return "";
     }
+  };
+
+  const applyKindFilter = (kind: string) => {
+    onKindFilterChange?.(kind);
+  };
+  const applyCategoryFilter = (category: string) => {
+    onCategoryFilterChange?.(category);
+  };
+  const applyTagFilter = (tag: string) => {
+    onTagFilterChange?.(tagFilter === tag ? "" : tag);
   };
 
   return (
@@ -247,10 +368,10 @@ export default function PostsPage({
                 <div>
                   <h2 className="post-title">{post.title}</h2>
                   <div className="meta">
-                    <span className="pill pill-kind">{kindName(post.kind)}</span>
+                    <span className="pill pill-kind clickable" onClick={(e) => { e.stopPropagation(); applyKindFilter(post.kind); }}>{kindName(post.kind)}</span>
                     <span className={`pill pill-status ${statusPillClass(post.status)}`}>{statusName(post.status)}</span>
-                    {post.category && <span className="pill pill-category">{post.category}</span>}
-                    {tagList(post.tags).map((tag) => <span key={tag} className="pill pill-tags">{tag}</span>)}
+                    {post.category && (() => { const c = getTagColor(post.category); return <span className="pill pill-category clickable" style={{ background: c.bg, borderColor: c.border, color: c.text }} onClick={(e) => { e.stopPropagation(); applyCategoryFilter(post.category); }}>{post.category}</span>; })()}
+                    {tagList(post.tags).length > 0 && <span className="tags-row">{tagList(post.tags).map((tag) => { const c = getTagColor(tag); return <span key={tag} className="pill pill-tag clickable" style={{ background: c.bg, borderColor: c.border, color: c.text }} onClick={(e) => { e.stopPropagation(); applyTagFilter(tag); }}>{tag}</span>; })}</span>}
                     <span className="meta-date">{formatDateTimeText(post.updated_at)}</span>
                   </div>
                 </div>
@@ -267,6 +388,8 @@ export default function PostsPage({
         onSave={handleViewSave}
         onDelete={handleViewDelete}
         onGenerateTitle={handleGenerateTitle}
+        onGenerateTags={handleGenerateTags}
+        onExtractLocations={handleExtractLocations}
       />
       <PostEditDialog
         post={editPost}
@@ -274,6 +397,8 @@ export default function PostsPage({
         onSave={handleSave}
         onDelete={handleDelete}
         onGenerateTitle={handleGenerateTitle}
+        onGenerateTags={handleGenerateTags}
+        onExtractLocations={handleExtractLocations}
       />
 
       {confirmElement}
@@ -282,20 +407,25 @@ export default function PostsPage({
   );
 }
 
-function PostViewDialog({
+export function PostViewDialog({
   post,
   onClose,
   onSave,
   onDelete,
   onGenerateTitle,
+  onGenerateTags,
+  onExtractLocations,
 }: {
   post: PostItem | null;
   onClose: () => void;
-  onSave: (id: number, p: Partial<PostItem> & { updated_at?: string }) => Promise<void> | void;
-  onDelete: (id: number) => Promise<void> | void;
-  onGenerateTitle: (body: string, category: string, tags: string) => Promise<string>;
+  onSave?: (id: number, p: Partial<PostItem> & { updated_at?: string }) => Promise<void> | void;
+  onDelete?: (id: number) => Promise<void> | void;
+  onGenerateTitle?: (body: string, category: string, tags: string) => Promise<string>;
+  onGenerateTags?: (body: string, category: string, title: string) => Promise<string>;
+  onExtractLocations?: (postId: number) => Promise<LocationItem[]>;
 }) {
   const { role } = useAuth();
+  const { loading } = useLoading();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeTimerRef = useRef<number | null>(null);
   const editTimerRef = useRef<number | null>(null);
@@ -303,7 +433,11 @@ function PostViewDialog({
   const [closing, setClosing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editClosing, setEditClosing] = useState(false);
+  const [locations, setLocations] = useState<LocationItem[]>([]);
   const editorRef = useRef<{ save: () => Promise<void> }>(null);
+  const editorActions = onSave && onDelete && onGenerateTitle && onGenerateTags && onExtractLocations
+    ? { onSave, onDelete, onGenerateTitle, onGenerateTags, onExtractLocations }
+    : null;
 
   useEffect(() => {
     if (post) {
@@ -318,6 +452,14 @@ function PostViewDialog({
     } else {
       activePostIdRef.current = null;
       dialogRef.current?.close();
+    }
+  }, [post]);
+
+  useEffect(() => {
+    if (post) {
+      listPostLocations(post.id).then(setLocations).catch(() => {});
+    } else {
+      setLocations([]);
     }
   }, [post]);
 
@@ -340,6 +482,7 @@ function PostViewDialog({
   };
 
   const enterEdit = () => {
+    if (!editorActions) return;
     setEditClosing(false);
     setEditing(true);
   };
@@ -362,6 +505,7 @@ function PostViewDialog({
       className={`post-view-dialog${editing ? " editing" : ""}${editClosing ? " edit-closing" : ""}${closing ? " closing" : ""}`}
       onCancel={(e) => {
         e.preventDefault();
+        if (loading) return;
         if (editing) {
           exitEdit();
         } else {
@@ -378,16 +522,18 @@ function PostViewDialog({
       }}
     >
       <section className={`dialog-body ${editing ? "post-editor post-editor-in-reader" : "wide reader"}`}>
-        {editing ? (
+        {editing && editorActions ? (
           <PostViewEditor
             ref={editorRef}
             post={post}
             onSave={async (payload) => {
-              await onSave(post.id, payload);
+              await editorActions.onSave(post.id, payload);
               exitEdit();
             }}
-            onDelete={() => onDelete(post.id)}
-            onGenerateTitle={onGenerateTitle}
+            onDelete={() => editorActions.onDelete(post.id)}
+            onGenerateTitle={editorActions.onGenerateTitle}
+            onGenerateTags={editorActions.onGenerateTags}
+            onExtractLocations={editorActions.onExtractLocations}
           />
         ) : (
         <>
@@ -397,17 +543,26 @@ function PostViewDialog({
             <div className="meta">
               <span className="pill pill-kind">{kindName(post.kind)}</span>
               <span className={`pill pill-status ${statusPillClass(post.status)}`}>{statusName(post.status)}</span>
-              {post.category && <span className="pill pill-category">{post.category}</span>}
-              {tagList(post.tags).map((tag) => <span key={tag} className="pill pill-tags">{tag}</span>)}
-              <span>{formatDateTimeText(post.updated_at)}</span>
+              {post.category && (() => { const c = getTagColor(post.category); return <span className="pill pill-category" style={{ background: c.bg, borderColor: c.border, color: c.text }}>{post.category}</span>; })()}
+              {tagList(post.tags).length > 0 && <span className="tags-row">{tagList(post.tags).map((tag) => { const c = getTagColor(tag); return <span key={tag} className="pill pill-tag" style={{ background: c.bg, borderColor: c.border, color: c.text }}>{tag}</span>; })}</span>}
+              {locations.length > 0 && (
+                <div className="reader-locations">
+                  {locations.map((loc) => (
+                    <span key={loc.id} className="pill pill-location">{loc.name}</span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <div className="head-actions">
-            {role === "owner" && <button className="primary" onClick={enterEdit}>编辑</button>}
-            <button className="secondary" onClick={requestClose}>关闭</button>
+            <div className="reader-head-buttons">
+              {role === "owner" && editorActions && <button className="primary" onClick={enterEdit}>编辑</button>}
+              <button className="secondary" onClick={requestClose}>关闭</button>
+            </div>
+            <span className="reader-head-time">{formatDateTimeText(post.updated_at)}</span>
           </div>
         </header>
-        <TypewriterBody text={post.body} animationKey={post.id} />
+        <TypewriterBody key={post.id} text={post.body} animationKey={post.id} />
         </>
         )}
       </section>
@@ -424,6 +579,24 @@ function TypewriterBody({ text, animationKey }: { text: string; animationKey: nu
     return Array.from(text);
   }, [text]);
   const [visibleCount, setVisibleCount] = useState(0);
+  const holdingRef = useRef(false);
+  const holdStartedAtRef = useRef(0);
+
+  const stopAcceleration = useCallback(() => {
+    holdingRef.current = false;
+    holdStartedAtRef.current = 0;
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("pointerup", stopAcceleration);
+    window.addEventListener("pointercancel", stopAcceleration);
+    window.addEventListener("blur", stopAcceleration);
+    return () => {
+      window.removeEventListener("pointerup", stopAcceleration);
+      window.removeEventListener("pointercancel", stopAcceleration);
+      window.removeEventListener("blur", stopAcceleration);
+    };
+  }, [stopAcceleration]);
 
   useEffect(() => {
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -433,28 +606,57 @@ function TypewriterBody({ text, animationKey }: { text: string; animationKey: nu
     }
 
     let index = 0;
-    let timer: number | undefined;
+    let frame: number | undefined;
+    let lastFrameAt = performance.now();
+    let remainingDelay = 140;
     setVisibleCount(0);
 
-    const tick = () => {
-      index += 1;
-      setVisibleCount(index);
-      if (index >= characters.length) return;
+    const tick = (now: number) => {
+      const elapsed = Math.min(now - lastFrameAt, 100);
+      lastFrameAt = now;
+      const accelerationSteps = holdingRef.current
+        ? Math.floor((now - holdStartedAtRef.current) / 500)
+        : 0;
+      const speed = 2 ** Math.max(0, accelerationSteps);
+      remainingDelay -= elapsed * speed;
 
-      const char = characters[index - 1];
-      const delay = /[。！？!?；;\n]/.test(char) ? 130 : /[，,、：:]/.test(char) ? 70 : 18;
-      timer = window.setTimeout(tick, delay);
+      let changed = false;
+      while (remainingDelay <= 0 && index < characters.length) {
+        const char = characters[index];
+        index += 1;
+        changed = true;
+        remainingDelay += /[。！？!?；;\n]/.test(char) ? 110 : /[，,、：:]/.test(char) ? 55 : 24;
+      }
+      if (changed) setVisibleCount(index);
+      if (index < characters.length) frame = window.requestAnimationFrame(tick);
     };
 
-    timer = window.setTimeout(tick, 120);
+    frame = window.requestAnimationFrame(tick);
     return () => {
-      if (timer) window.clearTimeout(timer);
+      if (frame) window.cancelAnimationFrame(frame);
+      stopAcceleration();
     };
-  }, [animationKey, characters]);
+  }, [animationKey, characters, stopAcceleration]);
 
   return (
-    <div className="reader-body typewriter-body" aria-label={text}>
-      <span aria-hidden="true">
+    <div
+      className={`reader-body typewriter-body${visibleCount < characters.length ? " is-animating" : ""}`}
+      aria-label={text}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || visibleCount >= characters.length) return;
+        holdingRef.current = true;
+        holdStartedAtRef.current = performance.now();
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerUp={stopAcceleration}
+      onPointerCancel={stopAcceleration}
+      onLostPointerCapture={stopAcceleration}
+      onContextMenu={(event) => {
+        if (visibleCount < characters.length) event.preventDefault();
+      }}
+    >
+      <span className="typewriter-measure" aria-hidden="true">{text || " "}</span>
+      <span className="typewriter-visible" aria-hidden="true">
         {characters.slice(0, visibleCount).map((char, index) => (
           <span
             key={`${animationKey}-${index}`}
@@ -473,25 +675,43 @@ interface PostViewEditorHandle {
   save: () => Promise<void>;
 }
 
-const PostViewEditor = forwardRef<PostViewEditorHandle, {
+interface EditorFormProps {
   post: PostItem;
   onSave: (p: Partial<PostItem> & { updated_at?: string }) => Promise<void> | void;
-  onDelete: () => Promise<void> | void;
+  onDelete?: () => void | Promise<void>;
+  onCancel?: () => void;
   onGenerateTitle: (body: string, category: string, tags: string) => Promise<string>;
-}>(function PostViewEditor({
+  onGenerateTags?: (body: string, category: string, title: string) => Promise<string>;
+  onExtractLocations?: (postId: number) => Promise<LocationItem[]>;
+}
+
+export interface EditorFormHandle {
+  save: () => Promise<void>;
+}
+
+const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function EditorForm({
   post,
   onSave,
   onDelete,
+  onCancel,
   onGenerateTitle,
+  onGenerateTags,
+  onExtractLocations,
 }, ref) {
+  const { setLoading } = useLoading();
   const [title, setTitle] = useState(post.title);
   const [body, setBody] = useState(post.body);
   const [kind, setKind] = useState<PostItem["kind"]>(post.kind);
   const [status, setStatus] = useState<PostItem["status"]>(post.status);
   const [category, setCategory] = useState(post.category);
-  const [tags, setTags] = useState(post.tags);
+  const [tagItems, setTagItems] = useState<string[]>(tagList(post.tags || ""));
+  const [tagInput, setTagInput] = useState("");
   const [updatedAtText, setUpdatedAtText] = useState(formatDateTimeText(post.updated_at || new Date().toISOString()));
   const [generating, setGenerating] = useState(false);
+  const [generatingTags, setGeneratingTags] = useState(false);
+  const [locations, setLocations] = useState<LocationItem[]>([]);
+  const [extractingLocations, setExtractingLocations] = useState(false);
+  const [locationInput, setLocationInput] = useState("");
   const savingRef = useRef(false);
 
   useEffect(() => {
@@ -500,9 +720,20 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
     setKind(post.kind);
     setStatus(post.status);
     setCategory(post.category);
-    setTags(post.tags);
+    setTagItems(tagList(post.tags || ""));
+    setTagInput("");
+    setLocationInput("");
     setUpdatedAtText(formatDateTimeText(post.updated_at || new Date().toISOString()));
+    setLocations([]);
   }, [post]);
+
+  useEffect(() => {
+    if (onExtractLocations && post.id > 0) {
+      listPostLocations(post.id).then(setLocations).catch(() => {});
+    } else {
+      setLocations([]);
+    }
+  }, [post.id, onExtractLocations]);
 
   const handleSave = async () => {
     if (savingRef.current) return;
@@ -519,7 +750,7 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
         kind,
         status,
         category: normalizeCategory(category),
-        tags: normalizeTags(tags),
+        tags: tagItems.join(", "),
         updated_at: parsedUpdatedAt.toISOString(),
       });
     } finally {
@@ -535,13 +766,116 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
       return;
     }
     setGenerating(true);
-    const nextTitle = await onGenerateTitle(body, category, tags);
-    if (nextTitle) setTitle(nextTitle);
-    setGenerating(false);
+    setLoading(true, "正在生成标题...");
+    try {
+      const nextTitle = await onGenerateTitle(body, category, tagItems.join(", "));
+      if (nextTitle) setTitle(nextTitle);
+    } finally {
+      setGenerating(false);
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateTags = async () => {
+    if (!onGenerateTags) return;
+    if (!body.trim()) {
+      alert("先写一点内容");
+      return;
+    }
+    setGeneratingTags(true);
+    setLoading(true, "正在生成标签...");
+    try {
+      const nextTags = await onGenerateTags(body, category, title);
+      console.log("AI tags raw:", nextTags);
+      const tags = tagList(normalizeTags(nextTags || ""));
+      console.log("AI tags parsed:", tags);
+      if (tags.length > 0) setTagItems(tags);
+    } catch (err: unknown) {
+      console.error("AI tags error:", err);
+    } finally {
+      setGeneratingTags(false);
+      setLoading(false);
+    }
+  };
+
+  const handleExtract = async () => {
+    if (!onExtractLocations || post.id <= 0) return;
+    if (!body.trim()) {
+      alert("先写一点内容");
+      return;
+    }
+    setExtractingLocations(true);
+    setLoading(true, "正在提取地点...");
+    try {
+      const extracted = await onExtractLocations(post.id);
+      if (extracted.length > 0) setLocations(extracted);
+    } finally {
+      setExtractingLocations(false);
+      setLoading(false);
+    }
+  };
+
+  const addLocation = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (post.id <= 0) return;
+    try {
+      const location = await addPostLocation(post.id, trimmed);
+      setLocations((prev) => {
+        if (prev.some((l) => l.id === location.id)) return prev;
+        return [location, ...prev];
+      });
+      setLocationInput("");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "添加地点失败");
+    }
+  };
+
+  const handleRemoveLocation = async (locationId: number) => {
+    if (post.id <= 0) return;
+    try {
+      await removePostLocation(post.id, locationId);
+      setLocations((prev) => prev.filter((l) => l.id !== locationId));
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "删除地点失败");
+    }
+  };
+
+  const handleLocationKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void addLocation(locationInput);
+    }
+  };
+
+  const handleLocationBlur = () => {
+    void addLocation(locationInput);
+  };
+
+  const addTag = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setTagItems((prev) => Array.from(new Set([...prev, trimmed])));
+    setTagInput("");
+  };
+
+  const removeTag = (tag: string) => {
+    setTagItems((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const handleTagKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addTag(tagInput);
+    }
+  };
+
+  const handleTagBlur = () => {
+    addTag(tagInput);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (generating) return;
+    if (generating || generatingTags || extractingLocations) return;
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
       void handleSave();
@@ -549,17 +883,80 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
   };
 
   return (
-    <form onSubmit={(event) => { event.preventDefault(); void handleSave(); }} onKeyDown={handleKeyDown}>
-      <div className="post-editor-meta">
-        <div className="field post-editor-title">
-          <label>标题</label>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+    <form className="editor-form" onSubmit={(event) => { event.preventDefault(); void handleSave(); }} onKeyDown={handleKeyDown}>
+      <div className="editor-header">
+        <input
+          className="editor-title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="请输入标题..."
+          autoFocus
+        />
+        <div className="editor-actions">
+          <button className="post-editor-ai plain" type="button" onClick={handleGenerate} disabled={generating}>
+            {generating ? "..." : "AI"}
+          </button>
+          {onDelete && (
+            <button className="danger post-editor-delete plain" type="button" onClick={onDelete} aria-label="删除" title="删除">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M6 6l1 15h10l1-15" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+            </button>
+          )}
+          {onExtractLocations && (
+            <button type="button" className="editor-extract-locations" onClick={handleExtract} disabled={extractingLocations}>
+              <span>📍</span>
+              <span>{extractingLocations ? "..." : "提取地点"}</span>
+            </button>
+          )}
+          {onCancel && (
+            <button className="secondary post-editor-cancel plain" type="button" onClick={onCancel}>取消</button>
+          )}
         </div>
-        <button className="post-editor-ai" type="button" onClick={handleGenerate} disabled={generating}>
-          {generating ? "..." : "AI"}
-        </button>
-        <div className="field post-editor-category">
-          <label>分类</label>
+      </div>
+
+      <textarea
+        className="editor-body"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="请输入正文内容..."
+      />
+
+      {onExtractLocations && (
+        <div className="editor-location-bar">
+          <div className="editor-location-list">
+            {locations.map((loc) => (
+              <span key={loc.id} className="pill pill-location">
+                {loc.name}
+                <button
+                  type="button"
+                  className="plain location-remove"
+                  onClick={() => handleRemoveLocation(loc.id)}
+                  aria-label={`删除 ${loc.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <input
+              type="text"
+              className="location-input"
+              value={locationInput}
+              onChange={(e) => setLocationInput(e.target.value)}
+              onKeyDown={handleLocationKeyDown}
+              onBlur={handleLocationBlur}
+              placeholder={locations.length === 0 ? "添加地点" : ""}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="editor-footer">
+        <div className="editor-field">
           <input
             value={category}
             onChange={(e) => setCategory(e.target.value)}
@@ -567,17 +964,29 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
             placeholder="分类"
           />
         </div>
-        <div className="field post-editor-tags">
-          <label>标签</label>
-          <input
-            value={tags}
-            onChange={(e) => setTags(e.target.value)}
-            onBlur={() => setTags((value) => normalizeTags(value))}
-            placeholder="标签，多个用逗号分隔"
-          />
+        <div className="editor-field editor-tags">
+          <div className="editor-tags-row">
+            {tagItems.map((tag) => (
+              <span key={tag} className="editor-tag-pill">
+                {tag}
+                <button type="button" onClick={() => removeTag(tag)} aria-label={`删除 ${tag}`}>×</button>
+              </span>
+            ))}
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={handleTagKeyDown}
+              onBlur={handleTagBlur}
+              placeholder={tagItems.length === 0 ? "标签，回车添加" : ""}
+            />
+          </div>
+          {onGenerateTags && (
+            <button className="editor-ai-tags plain" type="button" onClick={handleGenerateTags} disabled={generatingTags} aria-label="生成标签" title="生成标签">
+              {generatingTags ? "..." : "AI"}
+            </button>
+          )}
         </div>
-        <div className="field post-editor-kind">
-          <label>类型</label>
+        <div className="editor-field">
           <Select
             value={kind}
             ariaLabel="类型"
@@ -589,8 +998,7 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
             ]}
           />
         </div>
-        <div className="field post-editor-status">
-          <label>状态</label>
+        <div className="editor-field">
           <Select
             value={status}
             ariaLabel="状态"
@@ -601,8 +1009,7 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
             ]}
           />
         </div>
-        <div className="field post-editor-date-field">
-          <label>更新时间</label>
+        <div className="editor-field">
           <input
             className="post-editor-date"
             value={updatedAtText}
@@ -614,20 +1021,24 @@ const PostViewEditor = forwardRef<PostViewEditorHandle, {
             placeholder="2026-5-12 20:29"
           />
         </div>
-        <button className="danger post-editor-delete" type="button" onClick={onDelete} aria-label="删除" title="删除">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M3 6h18" />
-            <path d="M8 6V4h8v2" />
-            <path d="M6 6l1 15h10l1-15" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-          </svg>
-        </button>
       </div>
-      <label className="post-editor-body-label">正文</label>
-      <textarea className="post-editor-body" value={body} onChange={(e) => setBody(e.target.value)} />
     </form>
   );
+});
+
+const PostViewEditor = forwardRef<PostViewEditorHandle, {
+  post: PostItem;
+  onSave: (p: Partial<PostItem> & { updated_at?: string }) => Promise<void> | void;
+  onDelete: () => Promise<void> | void;
+  onGenerateTitle: (body: string, category: string, tags: string) => Promise<string>;
+  onGenerateTags?: (body: string, category: string, title: string) => Promise<string>;
+  onExtractLocations?: (postId: number) => Promise<LocationItem[]>;
+}>(function PostViewEditor(props, ref) {
+  const formRef = useRef<EditorFormHandle>(null);
+  useImperativeHandle(ref, () => ({
+    save: () => formRef.current?.save() || Promise.resolve(),
+  }));
+  return <EditorForm ref={formRef} {...props} />;
 });
 
 function PostEditDialog({
@@ -636,36 +1047,25 @@ function PostEditDialog({
   onSave,
   onDelete,
   onGenerateTitle,
+  onGenerateTags,
+  onExtractLocations,
 }: {
   post: PostItem | null;
   onClose: () => void;
   onSave: (p: Partial<PostItem> & { updated_at?: string }) => Promise<void> | void;
   onDelete: () => void;
   onGenerateTitle: (body: string, category: string, tags: string) => Promise<string>;
+  onGenerateTags?: (body: string, category: string, title: string) => Promise<string>;
+  onExtractLocations?: (postId: number) => Promise<LocationItem[]>;
 }) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [kind, setKind] = useState<PostItem["kind"]>("article");
-  const [status, setStatus] = useState<PostItem["status"]>("draft");
-  const [category, setCategory] = useState("");
-  const [tags, setTags] = useState("");
-  const [updatedAtText, setUpdatedAtText] = useState(formatDateTimeText(new Date().toISOString()));
-  const [generating, setGenerating] = useState(false);
+  const { loading } = useLoading();
   const [closing, setClosing] = useState(false);
-  const savingRef = useRef(false);
   const closeTimerRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     if (post) {
       setClosing(false);
-      setTitle(post.title);
-      setBody(post.body);
-      setKind(post.kind);
-      setStatus(post.status);
-      setCategory(post.category);
-      setTags(post.tags);
-      setUpdatedAtText(formatDateTimeText(post.updated_at || new Date().toISOString()));
       dialogRef.current?.showModal();
     } else {
       dialogRef.current?.close();
@@ -687,48 +1087,6 @@ function PostEditDialog({
     }, 180);
   };
 
-  const handleSave = async () => {
-    if (savingRef.current) return;
-    const parsedUpdatedAt = parseDateTimeText(updatedAtText);
-    if (!parsedUpdatedAt) {
-      alert("时间格式无法识别");
-      return;
-    }
-    savingRef.current = true;
-    try {
-      await onSave({
-        title,
-        body,
-        kind,
-        status,
-        category: normalizeCategory(category),
-        tags: normalizeTags(tags),
-        updated_at: parsedUpdatedAt.toISOString(),
-      });
-    } finally {
-      savingRef.current = false;
-    }
-  };
-
-  const handleEditorKeyDown = (event: React.KeyboardEvent) => {
-    if (generating) return;
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      void handleSave();
-    }
-  };
-
-  const handleGenerate = async () => {
-    if (!body.trim()) {
-      alert("先写一点内容");
-      return;
-    }
-    setGenerating(true);
-    const t = await onGenerateTitle(body, category, tags);
-    if (t) setTitle(t);
-    setGenerating(false);
-  };
-
   if (!post) return null;
 
   return (
@@ -736,104 +1094,29 @@ function PostEditDialog({
       ref={dialogRef}
       className={`post-dialog${closing ? " closing" : ""}`}
       onCancel={(e) => {
-        if (generating) { e.preventDefault(); return; }
         e.preventDefault();
-        void handleSave();
+        if (loading) return;
+        requestClose();
       }}
       onClick={(e) => {
-        if (generating) return;
         if (e.target === e.currentTarget) {
-          if (!title.trim() && !body.trim()) {
-            requestClose();
-          } else {
-            void handleSave();
-          }
+          requestClose();
         }
       }}
     >
       <section className="dialog-body post-editor">
-        <form onSubmit={(event) => { event.preventDefault(); void handleSave(); }} onKeyDown={handleEditorKeyDown}>
-          <div className="post-editor-meta">
-            <div className="field post-editor-title">
-              <label>标题</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-            </div>
-            <button className="post-editor-ai" type="button" onClick={handleGenerate} disabled={generating}>
-              {generating ? "..." : "AI"}
-            </button>
-            <div className="field post-editor-category">
-              <label>分类</label>
-              <input
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                onBlur={() => setCategory((value) => normalizeCategory(value))}
-                placeholder="分类"
-              />
-            </div>
-            <div className="field post-editor-tags">
-              <label>标签</label>
-              <input
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-                onBlur={() => setTags((value) => normalizeTags(value))}
-                placeholder="标签，多个用逗号分隔"
-              />
-            </div>
-            <div className="field post-editor-kind">
-              <label>类型</label>
-              <Select
-                value={kind}
-                ariaLabel="类型"
-                onChange={(value) => setKind(value as PostItem["kind"])}
-                options={[
-                  { value: "article", label: "文章" },
-                  { value: "thought", label: "想法" },
-                  { value: "note", label: "随手写" },
-                ]}
-              />
-            </div>
-            <div className="field post-editor-status">
-              <label>状态</label>
-              <Select
-                value={status}
-                ariaLabel="状态"
-                onChange={(value) => setStatus(value as PostItem["status"])}
-                options={[
-                  { value: "draft", label: "草稿" },
-                  { value: "published", label: "发布" },
-                ]}
-              />
-            </div>
-            <div className="field post-editor-date-field">
-              <label>更新时间</label>
-              <input
-                className="post-editor-date"
-                value={updatedAtText}
-                onChange={(e) => setUpdatedAtText(e.target.value)}
-                onBlur={() => {
-                  const parsed = parseDateTimeText(updatedAtText);
-                  if (parsed) setUpdatedAtText(formatDateTimeText(parsed.toISOString()));
-                }}
-                placeholder="2026-5-12 20:29"
-              />
-            </div>
-            {post.id > 0 ? (
-              <button className="danger post-editor-delete" type="button" onClick={onDelete} aria-label="删除" title="删除">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4h8v2" />
-                  <path d="M6 6l1 15h10l1-15" />
-                  <path d="M10 11v6" />
-                  <path d="M14 11v6" />
-                </svg>
-              </button>
-            ) : (
-              <button className="secondary post-editor-cancel" type="button" onClick={requestClose}>取消</button>
-            )}
-          </div>
-          <label className="post-editor-body-label">正文</label>
-          <textarea className="post-editor-body" value={body} onChange={(e) => setBody(e.target.value)} />
-        </form>
+        <EditorForm
+          post={post}
+          onSave={async (payload) => {
+            await onSave(payload);
+            requestClose();
+          }}
+          onDelete={onDelete}
+          onCancel={post.id > 0 ? undefined : requestClose}
+          onGenerateTitle={onGenerateTitle}
+          onGenerateTags={onGenerateTags}
+          onExtractLocations={onExtractLocations}
+        />
       </section>
     </dialog>
   );

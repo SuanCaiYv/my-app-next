@@ -299,8 +299,8 @@ textarea {
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--focus), inset 0 1px 0 rgb(255 255 255 / 76%);
+  border-color: var(--line-strong);
+  box-shadow: none;
 }
 
 *:focus-visible {
