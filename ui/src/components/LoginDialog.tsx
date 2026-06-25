@@ -21,7 +21,7 @@ export default function LoginDialog({ open, onClose }: { open: boolean; onClose:
     onClose();
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
     setError("");
     try {
@@ -50,6 +50,12 @@ export default function LoginDialog({ open, onClose }: { open: boolean; onClose:
         }
         backdropPointerDownRef.current = false;
       }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeDialog();
+        }
+      }}
     >
       <form
         className="login-box"
@@ -59,6 +65,8 @@ export default function LoginDialog({ open, onClose }: { open: boolean; onClose:
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <input type="text" autoComplete="username" style={{ position: "absolute", opacity: 0, pointerEvents: "none", height: 0 }} tabIndex={-1} aria-hidden="true" />
+        <input type="password" autoComplete="new-password" style={{ position: "absolute", opacity: 0, pointerEvents: "none", height: 0 }} tabIndex={-1} aria-hidden="true" />
         <input
           ref={inputRef}
           className={error ? "is-error" : ""}
@@ -68,9 +76,20 @@ export default function LoginDialog({ open, onClose }: { open: boolean; onClose:
             setPassword(e.target.value);
             if (error) setError("");
           }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void handleSubmit(e);
+            }
+          }}
           placeholder={error || "输入密码"}
           aria-label="密码"
           autoComplete="off"
+          data-lpignore="true"
+          readOnly
+          onFocus={(e) => {
+            e.currentTarget.removeAttribute("readonly");
+          }}
           autoFocus
         />
       </form>

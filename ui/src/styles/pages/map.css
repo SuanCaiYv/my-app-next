@@ -64,6 +64,58 @@
   color: var(--muted);
 }
 
+.map-location-marker {
+  background: transparent;
+  border: 0;
+}
+
+.location-popup {
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.location-popup-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.location-popup-section {
+  display: grid;
+  gap: 6px;
+}
+
+.location-popup-label {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.location-popup ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.location-popup-photos {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.location-popup-photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.location-popup-loading {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .map-photo-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

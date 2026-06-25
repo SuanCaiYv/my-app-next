@@ -6,6 +6,14 @@ import type {
   ChatSessionItem,
   AnalyzeRequest,
   ChatRequest,
+  MemoryItem,
+  MemorySummaryItem,
+  MemoryRecallMeta,
+  MemoryRecallPreview,
+  MemoryRecallEvent,
+  LocationItem,
+  LocationDetail,
+  ExtractLocationsRequest,
 } from "./types";
 
 let token = localStorage.getItem("ownerToken") || "";
@@ -95,6 +103,36 @@ export async function deletePhoto(id: number) {
   return api<void>(`/api/photos/${id}`, { method: "DELETE" });
 }
 
+export async function listLocations() {
+  return api<LocationItem[]>("/api/locations");
+}
+
+export async function extractLocations(body: ExtractLocationsRequest) {
+  return api<LocationItem[]>("/api/locations", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listPostLocations(postId: number) {
+  return api<LocationItem[]>(`/api/posts/${postId}/locations`);
+}
+
+export async function addPostLocation(postId: number, name: string) {
+  return api<LocationItem>(`/api/posts/${postId}/locations`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function removePostLocation(postId: number, locationId: number) {
+  return api<void>(`/api/posts/${postId}/locations/${locationId}`, { method: "DELETE" });
+}
+
+export async function getLocationDetail(locationId: number) {
+  return api<LocationDetail>(`/api/locations/${locationId}`);
+}
+
 export async function listAnalyses() {
   return api<AnalysisItem[]>("/api/analyses");
 }
@@ -110,6 +148,30 @@ export async function analyze(body: AnalyzeRequest) {
   });
 }
 
+export async function testLlmConnection(body: {
+  api_key: string;
+  base_url?: string;
+  model: string;
+  provider?: string;
+}) {
+  return api<{ ok: boolean; model: string; answer: string; elapsed_ms: number }>("/api/llm/test", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function testEmbeddingConnection(body: {
+  api_key: string;
+  base_url: string;
+  model: string;
+  provider?: string;
+}) {
+  return api<{ ok: boolean; model: string; dimensions: number; elapsed_ms: number }>("/api/embeddings/test", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function chat(body: ChatRequest) {
   return api<{ answer: string; usage: unknown }>("/api/chat", {
     method: "POST",
@@ -119,7 +181,9 @@ export async function chat(body: ChatRequest) {
 
 export async function chatStream(
   body: ChatRequest,
-  onChunk: (delta: string) => void
+  onChunk: (delta: string) => void,
+  onMemory?: (meta: MemoryRecallMeta) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -131,6 +195,7 @@ export async function chatStream(
     method: "POST",
     headers,
     body: JSON.stringify({ ...body, stream: true }),
+    signal,
   });
 
   if (!res.ok) {
@@ -142,30 +207,39 @@ export async function chatStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (signal?.aborted) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("data: ")) {
-        const data = trimmed.slice(6).trim();
-        if (data === "[DONE]") return;
-        try {
-          const json = JSON.parse(data);
-          const content = json.choices?.[0]?.delta?.content ?? json.delta?.text;
-          if (content) {
-            onChunk(content);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ")) {
+          const data = trimmed.slice(6).trim();
+          if (data === "[DONE]") return;
+          try {
+            const json = JSON.parse(data);
+            if (json.memory) {
+              onMemory?.(json.memory);
+              continue;
+            }
+            const content = json.choices?.[0]?.delta?.content ?? json.delta?.text;
+            if (content) {
+              onChunk(content);
+            }
+          } catch {
+            // ignore malformed JSON
           }
-        } catch {
-          // ignore malformed JSON
         }
       }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -193,4 +267,77 @@ export async function updateChatSession(id: number, body: unknown) {
 
 export async function deleteChatSession(id: number) {
   return api<void>(`/api/chat-sessions/${id}`, { method: "DELETE" });
+}
+
+export async function listMemories() {
+  return api<MemoryItem[]>("/api/memories");
+}
+
+export async function createMemory(body: unknown) {
+  return api<MemoryItem>("/api/memories", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateMemory(id: number, body: unknown) {
+  return api<MemoryItem>(`/api/memories/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteMemory(id: number) {
+  return api<void>(`/api/memories/${id}`, { method: "DELETE" });
+}
+
+export async function extractMemories(body: unknown) {
+  return api<MemoryItem[]>("/api/memories/extract", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listMemoryExtractionSources() {
+  return api<{ post_ids: number[]; photo_ids: number[] }>("/api/memory-extractions/sources");
+}
+
+export async function previewMemoryRecall(query: string, budgetTokens = 800) {
+  return api<MemoryRecallPreview>("/api/memories/recall-preview", {
+    method: "POST",
+    body: JSON.stringify({ query, budget_tokens: budgetTokens }),
+  });
+}
+
+export async function listMemoryRecallEvents() {
+  return api<MemoryRecallEvent[]>("/api/memory-recall-events");
+}
+
+export async function listMemorySummaries() {
+  return api<MemorySummaryItem[]>("/api/memory-summaries");
+}
+
+export async function createMemorySummary(body: unknown) {
+  return api<MemorySummaryItem>("/api/memory-summaries", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateMemorySummary(id: number, body: unknown) {
+  return api<MemorySummaryItem>(`/api/memory-summaries/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteMemorySummary(id: number) {
+  return api<void>(`/api/memory-summaries/${id}`, { method: "DELETE" });
+}
+
+export async function generateMemorySummary(body: unknown) {
+  return api<MemorySummaryItem>("/api/memory-summaries/generate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

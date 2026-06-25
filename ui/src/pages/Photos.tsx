@@ -81,7 +81,7 @@ export default function PhotosPage({
 
   const columnCount = useMemo(() => {
     if (!gridWidth) return 3;
-    const minColumnWidth = 260;
+    const minColumnWidth = 300;
     const gap = 18;
     return Math.max(1, Math.floor((gridWidth + gap) / (minColumnWidth + gap)));
   }, [gridWidth]);
@@ -171,7 +171,6 @@ export default function PhotosPage({
         id="photoList"
         className="photo-grid"
         ref={gridRef}
-        style={{ "--photo-columns": columnCount } as CSSProperties}
       >
         {loading ? (
           <>

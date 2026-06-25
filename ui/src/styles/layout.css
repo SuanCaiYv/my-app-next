@@ -32,7 +32,9 @@ body[data-view="chat"] .topbar {
 }
 
 .brand {
+  position: relative;
   grid-column: 1;
+  z-index: 10;
   -webkit-app-region: no-drag;
   app-region: no-drag;
   border: 0;
@@ -45,7 +47,7 @@ body[data-view="chat"] .topbar {
   font-size: 20px;
   font-weight: 750;
   text-align: left;
-  width: max-content;
+  width: fit-content;
   letter-spacing: 0;
   display: inline-flex;
   align-items: center;
@@ -65,10 +67,39 @@ body[data-view="chat"] .topbar {
   transform: translateY(2px);
 }
 
-.brand span {
+.brand-name {
   line-height: 1;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.brand-hit-spacer {
+  width: 24px;
+  height: 1px;
+  flex: 0 0 24px;
+}
+
+.brand-tap-progress {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 8px;
+  background: linear-gradient(
+    135deg,
+    #ff4d4d,
+    #ff9f1c,
+    #ffbf00,
+    #2ecc71,
+    #3498db,
+    #9b59b6,
+    #e91e63,
+    #ff4d4d
+  );
+  background-size: 200% 200%;
+  clip-path: circle(var(--tap-progress) at var(--tap-origin-x) var(--tap-origin-y));
+  -webkit-clip-path: circle(var(--tap-progress) at var(--tap-origin-x) var(--tap-origin-y));
+  pointer-events: none;
+  transition: clip-path 160ms ease, -webkit-clip-path 160ms ease;
 }
 
 .brand::before,
@@ -246,9 +277,9 @@ body[data-view="photos"] #photoList::-webkit-scrollbar {
 
 .list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  grid-template-columns: repeat(auto-fill, 300px);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
   justify-content: center;
 }
 
@@ -347,4 +378,40 @@ body[data-view="photos"] #newPostBtn {
 body[data-view="posts"] #newPostBtn,
 body[data-view="photos"] #newPhotoBtn {
   min-height: 44px;
+}
+
+.ai-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 16px;
+  background: rgb(20 27 30 / 18%);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  cursor: wait;
+  pointer-events: all;
+}
+
+.ai-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgb(255 255 255 / 50%);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ai-spin 800ms linear infinite;
+}
+
+.ai-loading-message {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

@@ -6,6 +6,7 @@ interface AuthContextType {
   setRole: (role: "guest" | "owner") => void;
   ownerClickCount: number;
   incrementOwnerClick: () => void;
+  resetOwnerClicks: () => void;
   token: string;
   login: (token: string) => void;
   logout: () => void;
@@ -44,9 +45,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOwnerClickCount((c) => c + 1);
   };
 
+  const resetOwnerClicks = () => {
+    setOwnerClickCount(0);
+  };
+
   return (
     <AuthContext.Provider
-      value={{ role, setRole, ownerClickCount, incrementOwnerClick, token, login, logout }}
+      value={{ role, setRole, ownerClickCount, incrementOwnerClick, resetOwnerClicks, token, login, logout }}
     >
       {children}
     </AuthContext.Provider>

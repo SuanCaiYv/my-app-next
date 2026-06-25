@@ -1,3 +1,4 @@
+@import "tailwindcss";
 @import "./styles/base.css";
 @import "./styles/layout.css";
 @import "./styles/components/form-controls.css";
@@ -8,6 +9,7 @@
 @import "./styles/pages/map.css";
 @import "./styles/pages/analyze.css";
 @import "./styles/pages/chat.css";
+@import "./styles/pages/memory.css";
 @import "./styles/components/pickers.css";
 @import "./styles/components/dialogs.css";
 @import "./styles/components/feedback.css";

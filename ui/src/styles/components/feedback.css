@@ -10,11 +10,14 @@ body.owner .sidebar .owner-only {
   display: block;
 }
 
-.toast {
+.toast,
+.toast:popover-open {
   position: fixed;
+  top: auto;
   right: 20px;
   bottom: 20px;
-  z-index: 9999;
+  left: auto;
+  z-index: 2147483647;
   padding: 10px 14px;
   border: 1px solid rgb(255 255 255 / 18%);
   background: rgb(25 31 34 / 78%);
@@ -29,7 +32,8 @@ body.owner .sidebar .owner-only {
   pointer-events: none;
 }
 
-.toast.show {
+.toast.show,
+.toast.show:popover-open {
   opacity: 1;
   transform: translateY(0);
 }
@@ -52,4 +56,41 @@ body.owner .sidebar .owner-only {
   display: grid;
   place-items: center;
   padding: 14px;
+}
+
+.auto-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 7px 10px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 7px;
+  background: rgb(29 35 38 / 94%);
+  color: #fff;
+  box-shadow: 0 8px 24px rgb(20 27 30 / 20%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  animation: tooltip-in 120ms ease both;
+}
+
+.auto-tooltip.below {
+  transform: translate(-50%, 0);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
 }
