@@ -256,7 +256,7 @@ button:not(.plain):hover,
 .button-link:hover {
   border-color: color-mix(in srgb, var(--accent) 26%, var(--glass-border));
   background: linear-gradient(145deg, rgb(255 255 255 / 84%), rgb(255 255 255 / 42%) 46%, rgb(255 255 255 / 72%));
-  box-shadow: var(--glass-hover-shadow);
+  box-shadow: var(--glass-hover-shadow), 0 0 24px rgba(47 125 121 / 18%);
   transform: translateY(-1px);
 }
 

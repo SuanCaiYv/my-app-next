@@ -422,6 +422,24 @@
   padding: 0;
   border-radius: 50%;
   font-size: 22px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: var(--ink);
+}
+
+.memory-dialog-head > button::before,
+.memory-dialog-head > button::after {
+  content: none;
+}
+
+.memory-dialog-head > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border: none;
+  box-shadow: none;
+  transform: none;
 }
 
 .memory-create-dialog textarea {
@@ -489,4 +507,77 @@
     max-height: calc(100vh - 24px);
     padding: 24px 20px;
   }
+}
+
+/* Importance / emotion sliders — custom range so fill aligns with the thumb */
+.dialog-body input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  min-height: 0;
+  margin: 2px 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  --thumb-size: 20px;
+  --track-h: 8px;
+  --range-fill: calc(var(--range, 0) * (100% - var(--thumb-size)) + var(--thumb-size) / 2);
+}
+
+.dialog-body input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--track-h);
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--range-fill),
+    color-mix(in srgb, var(--ink) 12%, transparent) var(--range-fill)
+  );
+}
+
+.dialog-body input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  box-shadow: 0 1px 4px rgb(36 44 47 / 22%);
+  margin-top: calc((var(--track-h) - var(--thumb-size)) / 2);
+}
+
+.dialog-body input[type="range"]::-moz-range-track {
+  height: var(--track-h);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.dialog-body input[type="range"]::-moz-range-progress {
+  height: var(--track-h);
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.dialog-body input[type="range"]::-moz-range-thumb {
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(36 44 47 / 22%);
+}
+
+.dialog-body input[type="range"]:focus-visible {
+  outline: none;
+}
+
+.dialog-body input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.dialog-body input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--focus);
 }

@@ -6,7 +6,9 @@ use anyhow::{Context, Result};
 
 fn resolve_static_dir() -> Result<PathBuf> {
     let exe_path = std::env::current_exe()?;
-    let mut base = exe_path.parent().context("executable has no parent directory")?;
+    let mut base = exe_path
+        .parent()
+        .context("executable has no parent directory")?;
 
     let candidates: Vec<PathBuf> = std::iter::from_fn(|| {
         let candidate = base.join("ui/dist");
@@ -33,7 +35,9 @@ fn resolve_static_dir() -> Result<PathBuf> {
 
 fn resolve_data_dir() -> Result<PathBuf> {
     let exe_path = std::env::current_exe()?;
-    let mut base = exe_path.parent().context("executable has no parent directory")?;
+    let mut base = exe_path
+        .parent()
+        .context("executable has no parent directory")?;
 
     let candidates: Vec<PathBuf> = std::iter::from_fn(|| {
         let candidate = base.join("data");

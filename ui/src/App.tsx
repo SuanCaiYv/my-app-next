@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
+import { PenLine, Upload } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { LoadingProvider, useLoading } from "./context/LoadingContext";
 import { listPosts, listPhotos } from "./api";
@@ -6,27 +7,23 @@ import PostsPage from "./pages/Posts";
 import PhotosPage from "./pages/Photos";
 import MapPage from "./pages/Map";
 import ChatPage from "./pages/Chat";
-import AnalyzePage from "./pages/Analyze";
-import MemoryPage from "./pages/Memory";
-import EmbeddingPage from "./pages/Embedding";
+import MePage from "./pages/Me";
 import LoginDialog from "./components/LoginDialog";
 import Select from "./components/Select";
 import AutoTooltip from "./components/AutoTooltip";
 
-type View = "posts" | "photos" | "map" | "chat" | "memory" | "embedding" | "analyze";
+type View = "posts" | "photos" | "map" | "chat" | "me";
 
 const tabs: { key: View; label: string; ownerOnly: boolean }[] = [
   { key: "posts", label: "文字", ownerOnly: false },
   { key: "photos", label: "照片", ownerOnly: false },
   { key: "map", label: "地图", ownerOnly: false },
   { key: "chat", label: "对话", ownerOnly: true },
-  { key: "memory", label: "记忆", ownerOnly: true },
-  { key: "embedding", label: "向量", ownerOnly: true },
-  { key: "analyze", label: "LLM", ownerOnly: true },
+  { key: "me", label: "Me", ownerOnly: true },
 ];
 
 function AppContent() {
-  const { role, ownerClickCount, incrementOwnerClick, resetOwnerClicks, logout } = useAuth();
+  const { role, incrementOwnerClick, resetOwnerClicks, logout } = useAuth();
   const { loading, message } = useLoading();
   const [view, setView] = useState<View>("posts");
   const [search, setSearch] = useState("");
@@ -41,7 +38,7 @@ function AppContent() {
   const [tapFill, setTapFill] = useState({ originX: 0, originY: 0, maxRadius: 0 });
   const tapRef = useRef({ count: 0, last: 0 });
   const tapResetTimerRef = useRef<number | null>(null);
-  const showOwner = role === "owner" || ownerClickCount >= 7;
+  const showOwner = role === "owner";
 
   useEffect(() => {
     document.body.dataset.view = view;
@@ -107,9 +104,12 @@ function AppContent() {
 
     const startDrag = (event: MouseEvent) => {
       if (event.button !== 0) return;
-      if ((event.target as Element)?.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
+      const target = event.target as Node;
+      const element = target.nodeType === Node.TEXT_NODE ? target.parentElement : (target as Element);
+      if (!element) return;
+      if (element.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame, .role")) return;
 
-      const inTopbar = (event.target as Element)?.closest(".topbar");
+      const inTopbar = element.closest(".topbar");
       const inWindowChrome = event.clientY <= 86;
       const inResizeZone =
         event.clientX >= window.innerWidth - 18 ||
@@ -120,49 +120,34 @@ function AppContent() {
       startWindowDrag();
     };
 
-    const dblClick = (event: MouseEvent) => {
-      if ((event.target as Element)?.closest("button, a, input, textarea, select, dialog, .custom-select, .tabs, .photo-frame")) return;
-      if (!(event.target as Element)?.closest(".topbar")) return;
-      appWindow.toggleMaximize?.().catch(() => {});
-    };
-
     document.addEventListener("mousedown", startDrag);
-    document.addEventListener("dblclick", dblClick);
     return () => {
       document.removeEventListener("mousedown", startDrag);
-      document.removeEventListener("dblclick", dblClick);
     };
   }, []);
 
   useEffect(() => {
     const topbar = document.querySelector(".topbar") as HTMLElement | null;
-    const brand = document.querySelector(".brand") as HTMLElement | null;
     const tabs = document.querySelector(".tabs") as HTMLElement | null;
-    if (!topbar || !brand || !tabs || !("ResizeObserver" in window)) return;
+    if (!topbar || !tabs || !("ResizeObserver" in window)) return;
 
-    const check = () => {
-      brand.classList.remove("hidden");
-    };
+    const check = () => {};
 
     check();
 
     const ro = new ResizeObserver(check);
     ro.observe(topbar);
     ro.observe(tabs);
-    ro.observe(brand);
-
-    const mo = new MutationObserver(check);
-    mo.observe(tabs, { childList: true, subtree: true, attributes: true });
 
     return () => {
       ro.disconnect();
-      mo.disconnect();
     };
   }, []);
 
-  const handleBrandClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const brand = e.currentTarget;
-    const rect = brand.getBoundingClientRect();
+  const handleBrandClick = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if ((e.target as Element).closest("button, a, input, textarea, select, dialog, .custom-select, .app-select-menu, .role")) return;
+    const topbar = e.currentTarget;
+    const rect = topbar.getBoundingClientRect();
     const originX = e.clientX - rect.left;
     const originY = e.clientY - rect.top;
     const maxRadius = Math.max(
@@ -202,7 +187,7 @@ function AppContent() {
         if (role === "owner") {
           logout();
           setLoginOpen(false);
-          if (view === "chat" || view === "memory" || view === "embedding" || view === "analyze") setView("posts");
+          if (view === "chat" || view === "me") setView("posts");
         } else {
           setLoginOpen(true);
         }
@@ -217,11 +202,6 @@ function AppContent() {
       tapResetTimerRef.current = null;
     }, 1200);
   }, [role, view, incrementOwnerClick, resetOwnerClicks, logout]);
-
-  const handleBrandDblClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
 
   const operationCard = (
     <aside className={`sidebar operation-card${view === "posts" ? " post-card" : ""}`} aria-label="操作">
@@ -258,11 +238,11 @@ function AppContent() {
       </div>
       {showOwner && (
         <div className="sidebar-row">
-          <button id="newPhotoBtn" className="primary" onClick={() => setNewPhotoTrigger(t => t + 1)}>
-            上传照片
+          <button id="newPhotoBtn" className="primary" onClick={() => setNewPhotoTrigger(t => t + 1)} aria-label="上传照片" title="上传照片">
+            <Upload size={18} strokeWidth={2} />
           </button>
-          <button id="newPostBtn" className="primary" onClick={() => setNewPostTrigger(t => t + 1)}>
-            写点什么
+          <button id="newPostBtn" className="primary" onClick={() => setNewPostTrigger(t => t + 1)} aria-label="写点什么" title="写点什么">
+            <PenLine size={18} strokeWidth={2} />
           </button>
         </div>
       )}
@@ -298,28 +278,18 @@ function AppContent() {
         </filter>
       </svg>
 
-      <header className="topbar" data-tauri-drag-region>
-        <button
-          className="brand"
-          onClick={handleBrandClick}
-          onDoubleClick={handleBrandDblClick}
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          <img src="/assets/logo.png" alt="" />
-          <span className="brand-name">Hello.me</span>
-          <span className="brand-hit-spacer" aria-hidden="true" />
-          {brandTapCount > 0 && (
-            <span
-              className="brand-tap-progress"
-              style={{
-                ["--tap-origin-x" as string]: `${tapFill.originX}px`,
-                ["--tap-origin-y" as string]: `${tapFill.originY}px`,
-                ["--tap-progress" as string]: `${(brandTapCount / 7) * tapFill.maxRadius}px`,
-              }}
-              aria-live="polite"
-            />
-          )}
-        </button>
+      <header className="topbar" onClick={handleBrandClick}>
+        {brandTapCount > 0 && (
+          <span
+            className="topbar-tap-progress"
+            style={{
+              ["--tap-origin-x" as string]: `${tapFill.originX}px`,
+              ["--tap-origin-y" as string]: `${tapFill.originY}px`,
+              ["--tap-progress" as string]: `${(brandTapCount / 7) * tapFill.maxRadius}px`,
+            }}
+            aria-live="polite"
+          />
+        )}
         <nav className="tabs" aria-label="主导航">
           {tabs.map((t) => {
             if (t.ownerOnly && !showOwner) return null;
@@ -340,7 +310,7 @@ function AppContent() {
             );
           })}
         </nav>
-        <div className="role" onClick={() => setLoginOpen(true)}>
+        <div className="role" onClick={(e) => { e.stopPropagation(); setLoginOpen(true); }}>
           {role === "owner" ? "主人" : "游客"}
         </div>
       </header>
@@ -370,9 +340,7 @@ function AppContent() {
           )}
           {view === "map" && <MapPage />}
           {view === "chat" && showOwner && <ChatPage />}
-          {view === "memory" && showOwner && <MemoryPage />}
-          {view === "embedding" && showOwner && <EmbeddingPage />}
-          {view === "analyze" && showOwner && <AnalyzePage />}
+          {view === "me" && showOwner && <MePage />}
         </section>
       </main>
 

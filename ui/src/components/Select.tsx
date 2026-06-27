@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import { createPortal } from "react-dom";
 
 export type SelectOption = {
   value: string;
-  label: string;
+  label: ReactNode;
 };
 
 export default function Select({
@@ -78,18 +80,11 @@ export default function Select({
         onClick={() => setOpen((next) => !next)}
       >
         <span className="min-w-0 truncate">{selected?.label || ""}</span>
-        <svg
-          className={`h-2.5 w-2.5 flex-shrink-0 text-[#6B7280] transition-transform duration-150 ${open ? "rotate-180" : ""}`}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+        <ChevronDown
+          className={`h-4 w-4 flex-shrink-0 text-[#4B5563] transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          strokeWidth={2}
           aria-hidden="true"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        />
       </button>
       {open && createPortal(
         <div
@@ -112,7 +107,7 @@ export default function Select({
                 setOpen(false);
               }}
             >
-              <span className="text-[13px] font-black text-[#1f605e]">{option.value === value ? "✓" : ""}</span>
+              <span className="text-[#1f605e]">{option.value === value ? <Check size={14} strokeWidth={3} /> : null}</span>
               <span className="whitespace-nowrap">{option.label}</span>
             </button>
           ))}

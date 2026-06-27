@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { Check, Download, Maximize2, Pencil, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { listPhotos, uploadPhoto, updatePhoto, deletePhoto } from "../api";
 import type { PhotoItem } from "../types";
@@ -198,9 +199,15 @@ export default function PhotosPage({
                     />
                     {role === "owner" && (
                       <div className="photo-actions">
-                        <button title="预览" aria-label="预览" onClick={(e) => { e.stopPropagation(); handlePreview(photo); }}>⤢</button>
-                        <a className="button-link" href={photo.url} download={photo.original_name || photo.filename} title="下载" aria-label="下载" onClick={(e) => e.stopPropagation()}>↓</a>
-                        <button title="编辑" aria-label="编辑" onClick={(e) => { e.stopPropagation(); setEditPhoto(photo); }}>✎</button>
+                        <button title="预览" aria-label="预览" onClick={(e) => { e.stopPropagation(); handlePreview(photo); }}>
+                          <Maximize2 size={14} strokeWidth={2} />
+                        </button>
+                        <a className="button-link" href={photo.url} download={photo.original_name || photo.filename} title="下载" aria-label="下载" onClick={(e) => e.stopPropagation()}>
+                          <Download size={14} strokeWidth={2} />
+                        </a>
+                        <button title="编辑" aria-label="编辑" onClick={(e) => { e.stopPropagation(); setEditPhoto(photo); }}>
+                          <Pencil size={14} strokeWidth={2} />
+                        </button>
                       </div>
                     )}
                     <div className="photo-info">
@@ -308,9 +315,13 @@ function PhotoPreviewDialog({ photo, initialSize, onClose }: { photo: PhotoItem 
             </div>
           </div>
           <div className="photo-preview-tools">
-            <button className="dialog-button" type="button" aria-label="缩小" onClick={() => setPreviewScale(scale - 0.25)}>-</button>
+            <button className="dialog-button" type="button" aria-label="缩小" onClick={() => setPreviewScale(scale - 0.25)}>
+              <ZoomOut size={16} strokeWidth={2} />
+            </button>
             <button className="dialog-button photo-zoom-label" type="button" onClick={() => setPreviewScale(1)}>{Math.round(scale * 100)}%</button>
-            <button className="dialog-button" type="button" aria-label="放大" onClick={() => setPreviewScale(scale + 0.25)}>+</button>
+            <button className="dialog-button" type="button" aria-label="放大" onClick={() => setPreviewScale(scale + 0.25)}>
+              <ZoomIn size={16} strokeWidth={2} />
+            </button>
           </div>
         </header>
         <div
@@ -360,8 +371,12 @@ function PhotoPreviewDialog({ photo, initialSize, onClose }: { photo: PhotoItem 
         </div>
         {photo.description && <p className="photo-preview-desc">{photo.description}</p>}
         <div className="dialog-actions">
-          <a className="button-link primary" href={photo.url} download={photo.original_name || photo.filename}>下载</a>
-          <button className="secondary" onClick={onClose}>关闭</button>
+          <a className="button-link primary" href={photo.url} download={photo.original_name || photo.filename}>
+            <Download size={16} strokeWidth={2} />
+          </a>
+          <button className="secondary" onClick={onClose}>
+            <X size={16} strokeWidth={2} />
+          </button>
         </div>
       </section>
     </dialog>
@@ -482,9 +497,9 @@ function PhotoEditDialog({
         </div>
         {error && <div className="dialog-error">{error}</div>}
         <div className="dialog-actions">
-          {photo.id > 0 && <button className="danger" type="button" onClick={onDelete} disabled={saving}>删除</button>}
-          <button className="secondary" type="button" onClick={onClose} disabled={saving}>取消</button>
-          <button className="primary" type="submit" disabled={saving}>{saving ? (photo.id > 0 ? "保存中..." : "上传中...") : (photo.id > 0 ? "保存" : "上传")}</button>
+          {photo.id > 0 && <button className="danger" type="button" onClick={onDelete} disabled={saving}><Trash2 size={16} strokeWidth={2} /></button>}
+          <button className="secondary" type="button" onClick={onClose} disabled={saving}><X size={16} strokeWidth={2} /></button>
+          <button className="primary" type="submit" disabled={saving}>{saving ? (photo.id > 0 ? "保存中..." : "上传中...") : <Check size={16} strokeWidth={2} />}</button>
         </div>
       </form>
     </dialog>

@@ -174,11 +174,6 @@
     pointer-events: auto;
   }
 
-  .post-card {
-    height: auto;
-    min-height: 160px;
-  }
-
   .photo-grid {
     grid-template-columns: 1fr;
   }
