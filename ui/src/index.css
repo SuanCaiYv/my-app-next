@@ -10,6 +10,7 @@
 @import "./styles/pages/analyze.css";
 @import "./styles/pages/chat.css";
 @import "./styles/pages/memory.css";
+@import "./styles/pages/me.css";
 @import "./styles/components/pickers.css";
 @import "./styles/components/dialogs.css";
 @import "./styles/components/feedback.css";

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Bot, Brain, Check, Pencil, Plus, Send, Sparkles, Square, Trash2, User, X } from "lucide-react";
 import {
   listPosts,
   listPhotos,
@@ -16,8 +17,8 @@ import type { PostItem, PhotoItem, ChatSessionSummary, ChatMessage, MemoryItem, 
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
-import { currentModel, loadActiveLlmProfile, requestProvider } from "../llmSettings";
-import { loadEmbeddingSettings } from "../embeddingSettings";
+import { currentModel, loadActiveLlmProfile, requestProvider, type LlmProfile } from "../llmSettings";
+import { loadEmbeddingSettings, type EmbeddingSettings } from "../embeddingSettings";
 import { PostViewDialog } from "./Posts";
 
 function renderMarkdown(source: string) {
@@ -50,10 +51,9 @@ function renderMarkdown(source: string) {
   return html;
 }
 
-function contextLimitForModel(model: string) {
-  const custom = localStorage.getItem("contextLimit");
-  if (custom) {
-    const parsed = parseInt(custom, 10);
+function contextLimitForModel(model: string, configured?: string) {
+  if (configured) {
+    const parsed = parseInt(configured, 10);
     if (!Number.isNaN(parsed) && parsed > 0) return parsed;
   }
   if (model.includes("gpt-4o") || model.includes("claude-3-5") || model.includes("claude-3-5-sonnet")) return 128000;
@@ -109,8 +109,9 @@ export default function ChatPage() {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<number[]>([]);
   const [sentPostIds, setSentPostIds] = useState<number[]>([]);
   const [sentPhotoIds, setSentPhotoIds] = useState<number[]>([]);
-  const [llmProfile] = useState(() => loadActiveLlmProfile());
-  const [embeddingSettings] = useState(() => loadEmbeddingSettings());
+  const [llmProfile, setLlmProfile] = useState<LlmProfile | null>(null);
+  const [embeddingSettings, setEmbeddingSettings] = useState<EmbeddingSettings | null>(null);
+  const [, setSettingsLoading] = useState(true);
   const [chatUsage, setChatUsage] = useState({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
   const [useMemory, setUseMemory] = useState(true);
   const [activeMemories, setActiveMemories] = useState<MemoryItem[]>([]);
@@ -120,6 +121,7 @@ export default function ChatPage() {
   const [extractedSources, setExtractedSources] = useState<{ post_ids: number[]; photo_ids: number[] }>({ post_ids: [], photo_ids: [] });
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [previewPost, setPreviewPost] = useState<PostItem | null>(null);
   const { show: showToast, element: toastElement } = useToast();
   const { confirm: confirmDialog, element: confirmElement } = useConfirm();
@@ -129,8 +131,23 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const composingRef = useRef(false);
 
-  const model = currentModel(llmProfile);
+  const model = llmProfile ? currentModel(llmProfile) : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([loadActiveLlmProfile(), loadEmbeddingSettings()]).then(([profile, embedding]) => {
+      if (cancelled) return;
+      setLlmProfile(profile);
+      setEmbeddingSettings(embedding);
+      setSettingsLoading(false);
+    }).catch(() => {
+      if (cancelled) return;
+      setSettingsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     listPosts().then(setPosts).catch(() => {});
@@ -160,6 +177,8 @@ export default function ChatPage() {
     setSentPostIds([]);
     setSentPhotoIds([]);
     setFreeText("");
+    setInput("");
+    setEditingIndex(null);
     setChatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
     setUseMemory(true);
     setMemoryRecall({ domains: 0, topics: 0, memories: 0, estimated_tokens: 0, semantic: false });
@@ -182,6 +201,7 @@ export default function ChatPage() {
       setSentPhotoIds(nextMessages.length > 0 ? nextPhotoIds : []);
       setFreeText(session.context_free_text || "");
       setUseMemory(session.use_memory !== false);
+      setEditingIndex(null);
       setMemoryRecall({ domains: 0, topics: 0, memories: 0, estimated_tokens: 0, semantic: false });
       setSelectedMemoryTurns([]);
       setChatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, confirmed: false, model: "" });
@@ -210,11 +230,24 @@ export default function ChatPage() {
   const handleSend = async () => {
     const content = input.trim();
     if (!content) { showToast("请输入对话内容"); return; }
+    if (!llmProfile) { showToast("正在加载 LLM 配置"); return; }
     if (!model.trim()) { showToast("先在 LLM 设置里填写模型"); return; }
 
-    const newMsgs: ChatMessage[] = [...messages, { role: "user", content }];
-    const outgoingPostIds = [...selectedPostIds];
-    const outgoingPhotoIds = [...selectedPhotoIds];
+    let newMsgs: ChatMessage[];
+    let outgoingPostIds: number[];
+    let outgoingPhotoIds: number[];
+
+    if (editingIndex !== null) {
+      newMsgs = [...messages.slice(0, editingIndex), { role: "user", content }];
+      outgoingPostIds = [...selectedPostIds];
+      outgoingPhotoIds = [...selectedPhotoIds];
+      setEditingIndex(null);
+    } else {
+      newMsgs = [...messages, { role: "user", content }];
+      outgoingPostIds = [...selectedPostIds];
+      outgoingPhotoIds = [...selectedPhotoIds];
+    }
+
     shouldStickToBottomRef.current = true;
     setMessages(newMsgs);
     setInput("");
@@ -225,10 +258,10 @@ export default function ChatPage() {
     let assistantContent = "";
 
     try {
-      const memoryBudget = Math.max(400, Math.min(4000, Math.floor(contextLimitForModel(model) * 0.15)));
+      const memoryBudget = Math.max(400, Math.min(4000, Math.floor(contextLimitForModel(model, llmProfile?.contextLimit) * 0.15)));
       const semanticMemoryEnabled = Boolean(
-        embeddingSettings.baseUrl.trim()
-        && embeddingSettings.model.trim(),
+        embeddingSettings?.baseUrl.trim()
+        && embeddingSettings?.model.trim(),
       );
       await chatStream({
         api_key: llmProfile.apiKey,
@@ -241,10 +274,10 @@ export default function ChatPage() {
         messages: newMsgs,
         use_memory: useMemory,
         memory_budget_tokens: memoryBudget,
-        embedding_model: semanticMemoryEnabled ? embeddingSettings.model.trim() : undefined,
-        embedding_api_key: semanticMemoryEnabled ? embeddingSettings.apiKey.trim() : undefined,
-        embedding_base_url: semanticMemoryEnabled ? embeddingSettings.baseUrl.trim() : undefined,
-        embedding_provider: semanticMemoryEnabled ? embeddingSettings.providerId : undefined,
+        embedding_model: semanticMemoryEnabled ? embeddingSettings?.model.trim() : undefined,
+        embedding_api_key: semanticMemoryEnabled ? embeddingSettings?.apiKey.trim() : undefined,
+        embedding_base_url: semanticMemoryEnabled ? embeddingSettings?.baseUrl.trim() : undefined,
+        embedding_provider: semanticMemoryEnabled ? embeddingSettings?.providerId : undefined,
       }, (delta) => {
         assistantContent += delta;
         setMessages((prev) => {
@@ -315,6 +348,10 @@ export default function ChatPage() {
       showToast("请勾选问答，或先添加文章、照片、指定片段");
       return;
     }
+    if (!llmProfile) {
+      showToast("正在加载 LLM 配置");
+      return;
+    }
     if (!model.trim()) {
       showToast("先在 LLM 设置里填写模型");
       return;
@@ -380,7 +417,7 @@ export default function ChatPage() {
     return total;
   }, [model, freeText, selectedPostIds, selectedPhotoIds, posts, messages, input, useMemory, memoryRecall, activeMemories]);
 
-  const limit = contextLimitForModel(model);
+  const limit = contextLimitForModel(model, llmProfile?.contextLimit);
   const used = chatUsage.confirmed && chatUsage.model === model ? Math.max(chatUsage.totalTokens, estimatedTokens) : estimatedTokens;
   const ratio = limit > 0 ? Math.min(used / limit, 1) : 0;
   const tokenState = ratio > 0.95 ? "danger" : ratio > 0.8 ? "warn" : "safe";
@@ -414,6 +451,8 @@ export default function ChatPage() {
   }, [posts]);
   const allPostsSelected = posts.length > 0 && posts.every((post) => selectedPostIds.includes(post.id));
   const allPhotosSelected = photos.length > 0 && photos.every((photo) => selectedPhotoIds.includes(photo.id));
+  const compactPostPicker = photosExpanded;
+  const compactPhotoPicker = postsExpanded;
   const togglePostSelection = (postId: number, checked: boolean) => {
     if (!checked && sentPostIds.includes(postId)) return;
     setSelectedPostIds((prev) => checked ? Array.from(new Set([...prev, postId])) : prev.filter((id) => id !== postId));
@@ -439,7 +478,7 @@ export default function ChatPage() {
     <section className="view active bg-[#F8F9FA]" id="chatView">
       <div className="mx-auto grid h-full w-full grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)] gap-6">
         {/* Left sidebar */}
-        <section className="flex h-full flex-col gap-5 overflow-hidden rounded-3xl border border-black/[0.04] bg-white/70 p-5 shadow-sm backdrop-blur-xl">
+        <section className="flex h-full min-h-0 flex-col gap-5 overflow-hidden rounded-3xl border border-black/[0.04] bg-white/70 p-5 shadow-sm backdrop-blur-xl">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold tracking-tight text-[#1A1A1A]">对话上下文</h2>
             <div className="flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/60 p-1">
@@ -456,18 +495,20 @@ export default function ChatPage() {
                   }}
                 />
                 <span className="h-[18px] w-8 rounded-full bg-[#E5E5EA] transition-colors peer-checked:bg-[#2f7d79] relative"><span className="absolute left-[2px] top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-[14px]" /></span>
+                <Brain size={15} strokeWidth={2} />
                 <span>使用记忆</span>
               </label>
               <button
-                className="plain rounded-full px-3 py-1.5 text-[13px] font-medium text-[#4A4A4A] transition-colors hover:bg-black/[0.03] disabled:opacity-40 disabled:cursor-not-allowed"
+                className="plain inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[#4A4A4A] transition-colors hover:bg-black/[0.03] disabled:opacity-40 disabled:cursor-not-allowed"
                 disabled={extractingMemory || (selectedMemoryTurns.length === 0 && !hasMemoryExtractionAttachments)}
                 onClick={handleExtractMemory}
               >
-                {extractingMemory
+                <Sparkles size={14} strokeWidth={2} />
+                <span>{extractingMemory
                   ? "提取中..."
                   : selectedMemoryTurns.length > 0
                     ? `提取已选 ${selectedMemoryTurns.length}${hasMemoryExtractionAttachments ? " + 附件" : ""}`
-                    : "提取附件"}
+                    : "提取附件"}</span>
               </button>
             </div>
           </div>
@@ -483,7 +524,7 @@ export default function ChatPage() {
             />
           </div>
 
-          <div className="flex min-h-0 flex-col gap-3">
+          <div className={`flex min-h-0 flex-col gap-3 ${postsExpanded ? "flex-1 overflow-hidden" : "flex-none"}`}>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-[15px] font-semibold text-[#1A1A1A]">选择文字</h3>
               <div className="flex items-center gap-1">
@@ -495,12 +536,19 @@ export default function ChatPage() {
                 >
                   {allPostsSelected ? "清空" : "全选"}
                 </button>
-                <button type="button" className="plain rounded-lg px-2.5 py-1 text-[13px] font-medium text-[#8E8E93] transition-colors hover:bg-black/[0.04] hover:text-[#4A4A4A]" onClick={() => setPostsExpanded((value) => !value)}>
+                <button
+                  type="button"
+                  className="plain rounded-lg px-2.5 py-1 text-[13px] font-medium text-[#8E8E93] transition-colors hover:bg-black/[0.04] hover:text-[#4A4A4A]"
+                  onClick={() => {
+                    setPostsExpanded((value) => !value);
+                    setPhotosExpanded(false);
+                  }}
+                >
                   {postsExpanded ? "收起" : "展开"}
                 </button>
               </div>
             </div>
-            <div className={`w-full flex min-h-0 flex-col gap-1 overflow-y-auto rounded-2xl border border-black/[0.05] bg-white/50 p-3 transition-all ${postsExpanded ? "flex-1" : "max-h-[180px]"}`}>
+            <div className={`w-full flex min-h-0 flex-col gap-1 overflow-y-auto rounded-2xl border border-black/[0.05] bg-white/50 p-3 transition-all ${postsExpanded ? "flex-1" : compactPostPicker ? "max-h-[92px]" : "max-h-[180px]"}`}>
               {posts.length === 0 && <div className="py-6 text-center text-[13px] font-medium text-[#8E8E93]">暂无文字</div>}
               {groupedPostPickerItems.map((item) => (
                 item.type === "year" ? (
@@ -534,7 +582,7 @@ export default function ChatPage() {
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-col gap-3">
+          <div className={`flex min-h-0 flex-col gap-3 ${photosExpanded ? "flex-1 overflow-hidden" : "flex-none"}`}>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-[15px] font-semibold text-[#1A1A1A]">选择照片</h3>
               <div className="flex items-center gap-1">
@@ -546,12 +594,19 @@ export default function ChatPage() {
                 >
                   {allPhotosSelected ? "清空" : "全选"}
                 </button>
-                <button type="button" className="plain rounded-lg px-2.5 py-1 text-[13px] font-medium text-[#8E8E93] transition-colors hover:bg-black/[0.04] hover:text-[#4A4A4A]" onClick={() => setPhotosExpanded((value) => !value)}>
+                <button
+                  type="button"
+                  className="plain rounded-lg px-2.5 py-1 text-[13px] font-medium text-[#8E8E93] transition-colors hover:bg-black/[0.04] hover:text-[#4A4A4A]"
+                  onClick={() => {
+                    setPhotosExpanded((value) => !value);
+                    setPostsExpanded(false);
+                  }}
+                >
                   {photosExpanded ? "收起" : "展开"}
                 </button>
               </div>
             </div>
-            <div className={`w-full flex min-h-0 flex-col gap-1 overflow-y-auto rounded-2xl border border-black/[0.05] bg-white/50 p-3 transition-all ${photosExpanded ? "flex-1" : "max-h-[180px]"}`}>
+            <div className={`w-full flex min-h-0 flex-col gap-1 overflow-y-auto rounded-2xl border border-black/[0.05] bg-white/50 p-3 transition-all ${photosExpanded ? "flex-1" : compactPhotoPicker ? "max-h-[68px]" : "max-h-[180px]"}`}>
               {photos.length === 0 && <div className="py-6 text-center text-[13px] font-medium text-[#8E8E93]">暂无照片</div>}
               {photos.map((photo) => (
                 <label key={photo.id} className="group relative flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 transition-colors hover:bg-black/[0.03]">
@@ -575,7 +630,7 @@ export default function ChatPage() {
         {/* Right panel */}
         <section className="chat-panel relative flex h-full flex-col overflow-hidden rounded-3xl border border-black/[0.04] bg-white/60 shadow-sm backdrop-blur-xl">
           <div className="flex items-center gap-3 border-b border-black/[0.04] px-5 py-3">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 chat-session-select">
               <Select
                 value={currentSessionId ? String(currentSessionId) : ""}
                 ariaLabel="会话"
@@ -590,9 +645,18 @@ export default function ChatPage() {
               />
             </div>
             <div className="flex items-center gap-1.5">
-              <button className="plain rounded-lg px-3 py-2 text-[13px] font-medium text-[#4A4A4A] transition-colors hover:bg-black/[0.04] disabled:opacity-40" disabled={!currentSessionId} onClick={() => { const s = sessions.find((x) => x.id === currentSessionId); setRenameTitle(s?.title || ""); setRenameOpen(true); }}>重命名</button>
-              <button className="plain rounded-lg px-3 py-2 text-[13px] font-medium text-[#4A4A4A] transition-colors hover:bg-black/[0.04] disabled:opacity-40" disabled={!currentSessionId} onClick={handleDeleteSession}>删除</button>
-              <button className="plain rounded-lg bg-[#1A1A1A] px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-black/80" onClick={handleNewSession}>新对话</button>
+              <button className="plain flex h-9 w-9 items-center justify-center rounded-[18px] text-[#4A4A4A] transition-colors hover:bg-black/[0.04] disabled:opacity-40" disabled={!currentSessionId} onClick={() => { const s = sessions.find((x) => x.id === currentSessionId); setRenameTitle(s?.title || ""); setRenameOpen(true); }} aria-label="重命名" title="重命名">
+                <Pencil size={15} strokeWidth={2} />
+              </button>
+              <button className="plain flex h-9 w-9 items-center justify-center rounded-[18px] text-[#4A4A4A] transition-colors hover:bg-black/[0.04] disabled:opacity-40" disabled={!currentSessionId} onClick={handleDeleteSession} aria-label="删除" title="删除">
+                <Trash2 size={15} strokeWidth={2} />
+              </button>
+              <button className="plain flex h-9 w-9 items-center justify-center rounded-[18px] text-[#C4483D] transition-colors hover:bg-[#C4483D]/8 disabled:opacity-40" disabled={!chatting} onClick={handleStop} aria-label="终止" title="终止">
+                <Square size={14} fill="currentColor" stroke="none" />
+              </button>
+              <button className="plain flex h-9 w-9 items-center justify-center rounded-[18px] bg-[#1A1A1A] text-white transition-colors hover:bg-black/80" onClick={handleNewSession} aria-label="新对话" title="新对话">
+                <Plus size={16} strokeWidth={2} />
+              </button>
             </div>
           </div>
 
@@ -608,14 +672,14 @@ export default function ChatPage() {
           >
             {messages.length === 0 && !chatting && (
               <div className="flex h-full flex-col items-center justify-center text-center">
-                <div className="mb-3 text-4xl">✨</div>
+                <Sparkles size={40} strokeWidth={1.5} className="mb-3 text-[#8E8E93]" />
                 <p className="text-[15px] font-medium text-[#8E8E93]">选择上下文后开始提问</p>
               </div>
             )}
             {messages.map((msg, i) => (
               <article key={i} className={`mb-6 flex ${msg.role === "user" ? "flex-row-reverse" : "flex-row"} items-start gap-3`}>
-                <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white ${msg.role === "assistant" ? "bg-[#326f88]" : "bg-[#2f7d79]"}`}>
-                  {msg.role === "assistant" ? "AI" : "我"}
+                <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-white ${msg.role === "assistant" ? "bg-[#326f88]" : "bg-[#2f7d79]"}`}>
+                  {msg.role === "assistant" ? <Bot size={16} strokeWidth={2} aria-label="AI" /> : <User size={16} strokeWidth={2} aria-label="我" />}
                 </div>
                 <div className={`flex min-w-0 flex-col ${msg.role === "user" ? "items-end" : "items-start"} max-w-[85%]`}>
                   {msg.role === "user" ? (
@@ -628,6 +692,15 @@ export default function ChatPage() {
                       {selectedMemoryTurns.includes(i) && (
                         <span className="absolute -left-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-[#2f7d79] ring-2 ring-white" aria-hidden="true" />
                       )}
+                      <button
+                        type="button"
+                        className="plain absolute -right-8 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-[#8E8E93] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 hover:text-[#1A1A1A]"
+                        onClick={(e) => { e.stopPropagation(); setInput(msg.content); setEditingIndex(i); }}
+                        aria-label="编辑"
+                        title="编辑"
+                      >
+                        <Pencil size={12} strokeWidth={2} />
+                      </button>
                     </div>
                   ) : (
                     <div className="markdown w-full text-[15px] leading-7 text-[#1A1A1A]">
@@ -639,7 +712,9 @@ export default function ChatPage() {
             ))}
             {chatting && !(messages.length > 0 && messages[messages.length - 1].role === "assistant" && messages[messages.length - 1].content.trim().length > 0) && (
               <article className="mb-6 flex flex-row items-start gap-3">
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#326f88] text-[11px] font-bold text-white">AI</div>
+                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#326f88] text-white">
+                  <Bot size={16} strokeWidth={2} aria-label="AI" />
+                </div>
                 <div className="mt-1.5 text-[14px] text-[#8E8E93]">正在输入...</div>
               </article>
             )}
@@ -651,22 +726,24 @@ export default function ChatPage() {
             {/* Context attachments + token meter above input box */}
             <div className="flex flex-col gap-2 px-1">
               {(contextSummary.length > 0 || useMemory) && (
-                <div className="flex flex-nowrap gap-1.5 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                <div className="flex flex-nowrap gap-1.5 overflow-x-auto pb-1 min-w-0 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                   {contextSummary.map((item) => item.type === "post" ? (
-                    <button
+                    <span
                       key={`post-${item.id}`}
-                      type="button"
-                      className={`plain inline-flex max-w-[200px] items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors ${item.extracted ? "border-[#2f7d79]/30 bg-[#2f7d79]/8 text-[#1f605e]" : "border-black/[0.06] bg-black/[0.03] text-[#4A4A4A] hover:bg-black/[0.05]"}`}
-                      title={item.extracted ? "预览文章 · 已提取记忆" : "预览文章"}
+                      role="button"
+                      tabIndex={0}
+                      className={`inline-flex flex-shrink-0 whitespace-nowrap max-w-[200px] cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors ${item.extracted ? "border-[#2f7d79]/30 bg-[#2f7d79]/8 text-[#1f605e]" : "border-black/[0.06] bg-black/[0.03] text-[#4A4A4A] hover:bg-black/[0.05]"}`}
+                      title={item.extracted ? "已提取记忆" : "预览文章"}
                       onClick={() => setPreviewPost(posts.find((post) => post.id === item.id) || null)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPreviewPost(posts.find((post) => post.id === item.id) || null); }}}
                     >
                       <span className="truncate">{item.label}</span>
                       {item.extracted && <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[#2f7d79]" />}
-                    </button>
+                    </span>
                   ) : (
                     <span
                       key={`${item.type}-${item.type === "photo" ? item.id : item.label}`}
-                      className={`inline-flex max-w-[200px] items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] ${item.type === "photo" && item.extracted ? "border-[#2f7d79]/30 bg-[#2f7d79]/8 text-[#1f605e]" : "border-black/[0.06] bg-black/[0.03] text-[#4A4A4A]"}`}
+                      className={`inline-flex flex-shrink-0 whitespace-nowrap max-w-[200px] items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] ${item.type === "photo" && item.extracted ? "border-[#2f7d79]/30 bg-[#2f7d79]/8 text-[#1f605e]" : "border-black/[0.06] bg-black/[0.03] text-[#4A4A4A]"}`}
                       title={item.type === "photo" && item.extracted ? "已提取记忆" : undefined}
                     >
                       <span className="truncate">{item.label}</span>
@@ -674,12 +751,12 @@ export default function ChatPage() {
                     </span>
                   ))}
                   {useMemory && (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-[#2f7d79]/20 bg-[#2f7d79]/8 px-2.5 py-1 text-[12px] text-[#1f605e]">
-                      长期记忆 · {memoryRecall.memories} 条
+                    <span className="inline-flex flex-shrink-0 whitespace-nowrap max-w-[200px] items-center gap-1 rounded-full border border-[#2f7d79]/20 bg-[#2f7d79]/8 px-2.5 py-1 text-[12px] text-[#1f605e]">
+                      <span className="truncate">长期记忆 · {memoryRecall.memories} 条
                       {memoryRecall.mode ? ` · ${memoryRecall.mode}` : memoryRecall.semantic ? " · 语义" : " · 关键词"}
                       {memoryRecall.depth ? ` · ${memoryRecall.depth}` : ""}
                       {(memoryRecall.expanded_node_ids?.length || 0) > 0 ? ` · 联想 ${memoryRecall.expanded_node_ids?.length}` : ""}
-                      {memoryRecall.planned ? " · 已规划" : ""}
+                      {memoryRecall.planned ? " · 已规划" : ""}</span>
                     </span>
                   )}
                 </div>
@@ -699,15 +776,36 @@ export default function ChatPage() {
 
             {/* Floating input box */}
             <div className="relative">
+              {editingIndex !== null && (
+                <div className="mb-1.5 flex items-center justify-between px-1">
+                  <span className="text-[12px] font-medium text-[#2f7d79]">编辑中</span>
+                  <button
+                    type="button"
+                    className="plain flex h-6 w-6 items-center justify-center rounded-full text-[#8E8E93] hover:text-[#1A1A1A]"
+                    onClick={() => { setInput(""); setEditingIndex(null); }}
+                    aria-label="取消"
+                    title="取消"
+                  >
+                    <X size={12} strokeWidth={2} />
+                  </button>
+                </div>
+              )}
               <textarea
                 className="min-h-[96px] w-full resize-none rounded-2xl bg-white px-4 py-3.5 pr-12 text-[15px] leading-relaxed text-[#1A1A1A] placeholder:text-[#8E8E93] shadow-sm focus:outline-none transition-all"
                 placeholder="基于选中的内容提问"
                 rows={3}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => { composingRef.current = false; }}
                 onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setInput("");
+                    setEditingIndex(null);
+                    return;
+                  }
                   if (e.key !== "Enter") return;
-                  if (e.nativeEvent.isComposing) return;
+                  if (e.nativeEvent.isComposing || composingRef.current) return;
                   if (e.shiftKey) {
                     e.stopPropagation();
                     return;
@@ -723,7 +821,7 @@ export default function ChatPage() {
                   onClick={handleStop}
                   aria-label="停止"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                  <Square size={14} fill="currentColor" stroke="none" />
                 </button>
               ) : (
                 <button
@@ -733,7 +831,7 @@ export default function ChatPage() {
                   onClick={handleSend}
                   aria-label="发送"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" /></svg>
+                  <Send size={14} strokeWidth={2.5} />
                 </button>
               )}
             </div>
@@ -757,8 +855,8 @@ export default function ChatPage() {
             <h3>重命名会话</h3>
             <input value={renameTitle} onChange={(e) => setRenameTitle(e.target.value)} autoFocus />
             <div className="dialog-actions">
-              <button className="secondary" onClick={() => setRenameOpen(false)}>取消</button>
-              <button className="primary" onClick={handleRename}>保存</button>
+              <button className="secondary" onClick={() => setRenameOpen(false)} aria-label="取消" title="取消"><X size={16} strokeWidth={2} /></button>
+              <button className="primary" onClick={handleRename} aria-label="保存" title="保存"><Check size={16} strokeWidth={2} /></button>
             </div>
           </section>
         </dialog>

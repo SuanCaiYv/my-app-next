@@ -1,2 +1,3 @@
-/* Chat page styles are now handled by Tailwind utility classes in ui/src/pages/Chat.tsx. */
-/* Buttons with class "plain" are excluded from the global glassmorphism button styles in base.css. */
+.chat-session-select .app-select-button {
+  border-radius: 18px;
+}

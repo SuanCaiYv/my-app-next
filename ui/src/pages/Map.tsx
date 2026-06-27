@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import { getLocationDetail, listLocations, listPhotos } from "../api";
+import { getLocationDetail, listLocations, listPhotos, loadAppSettings } from "../api";
 import type { LocationItem, PhotoItem } from "../types";
 import L from "leaflet";
 
@@ -65,7 +65,9 @@ export default function MapPage() {
   const [details, setDetails] = useState<Record<number, { posts: { id: number; title: string }[]; photos: PhotoItem[] }>>({});
 
   useEffect(() => {
-    setAmapKey(localStorage.getItem("amapKey") || "");
+    loadAppSettings()
+      .then((settings) => setAmapKey(settings.amapKey || ""))
+      .catch(() => {});
     Promise.all([listPhotos(), listLocations()])
       .then(([p, l]) => {
         setPhotos(p);

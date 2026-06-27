@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Select from "../components/Select";
-import { testEmbeddingConnection } from "../api";
-import { loadEmbeddingSettings, saveEmbeddingSettings, type EmbeddingSettings } from "../embeddingSettings";
+import { testEmbeddingConnection, loadEmbeddingSettings, saveEmbeddingSettings } from "../api";
+import { defaultEmbeddingSettings, type EmbeddingSettings } from "../embeddingSettings";
 import { useToast } from "../hooks/useToast";
 
 const providers = [
@@ -14,11 +14,24 @@ const providers = [
 ];
 
 export default function EmbeddingPage() {
-  const initial = useMemo(() => loadEmbeddingSettings(), []);
-  const [settings, setSettings] = useState<EmbeddingSettings>(initial);
+  const [settings, setSettings] = useState<EmbeddingSettings>(defaultEmbeddingSettings());
+  const [, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ state: "success" | "error"; message: string } | null>(null);
   const { show: showToast, element: toastElement } = useToast();
+
+  useEffect(() => {
+    let cancelled = false;
+    loadEmbeddingSettings().then((value) => {
+      if (cancelled) return;
+      setSettings(value);
+      setLoading(false);
+    }).catch(() => {
+      if (cancelled) return;
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const update = (patch: Partial<EmbeddingSettings>) => setSettings((current) => ({ ...current, ...patch }));
   const changeProvider = (providerId: string) => {
@@ -31,9 +44,9 @@ export default function EmbeddingPage() {
     if (!settings.model.trim()) { showToast("请填写 Embedding 模型"); return false; }
     return true;
   };
-  const save = () => {
+  const save = async () => {
     if (!validate()) return;
-    saveEmbeddingSettings(settings);
+    await saveEmbeddingSettings(settings);
     showToast("向量配置已保存");
   };
   const test = async () => {

@@ -182,7 +182,7 @@ export interface MemoryRecallMeta {
   selected_node_ids?: number[];
   expanded_node_ids?: number[];
   planned?: boolean;
-  scores?: Array<{ node_id: number; score: number; reason: string }>;
+  scores?: Array<{ node_id: number; score: number; lexical_score?: number; semantic_score?: number; reason: string }>;
 }
 
 export interface MemoryRecallPreview {

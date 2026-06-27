@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
-import { testLlmConnection } from "../api";
+import { testLlmConnection, loadAppSettings, saveAppSettings } from "../api";
 import {
   createLlmProfile,
   currentModel,
@@ -257,10 +257,10 @@ function parseContextLimit(value: string): number | null {
 }
 
 export default function AnalyzePage() {
-  const initialSettings = useMemo(() => loadLlmProfiles(), []);
-  const [profiles, setProfiles] = useState<LlmProfile[]>(initialSettings.profiles);
-  const [activeId, setActiveId] = useState(initialSettings.activeId);
-  const [amapKey, setAmapKey] = useState(() => localStorage.getItem("amapKey") || "");
+  const [profiles, setProfiles] = useState<LlmProfile[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [, setLoading] = useState(true);
+  const [amapKey, setAmapKey] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     state: "success" | "error";
@@ -268,8 +268,48 @@ export default function AnalyzePage() {
   } | null>(null);
   const { show: showToast, element: toastElement } = useToast();
 
+  useEffect(() => {
+    let cancelled = false;
+    loadLlmProfiles().then((settings) => {
+      if (cancelled) return;
+      setProfiles(settings.profiles);
+      setActiveId(settings.activeId);
+      setLoading(false);
+    }).catch(() => {
+      if (cancelled) return;
+      const fallback = createLlmProfile();
+      setProfiles([fallback]);
+      setActiveId(fallback.id);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAppSettings()
+      .then(async (settings) => {
+        let key = settings.amapKey || "";
+        if (!key) {
+          const legacy = localStorage.getItem("amapKey") || "";
+          if (legacy) {
+            key = legacy;
+            try {
+              await saveAppSettings({ amapKey: legacy });
+              localStorage.removeItem("amapKey");
+            } catch {
+              // Keep legacy value locally if backend save fails.
+            }
+          }
+        }
+        if (!cancelled) setAmapKey(key);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const activeProfile = profiles.find((item) => item.id === activeId) || profiles[0];
-  const providerId = activeProfile.providerId;
+  const providerId = activeProfile?.providerId || "openai";
   const provider = useMemo(() => providers.find((item) => item.id === providerId) || providers[0], [providerId]);
   const modelOptions = useMemo(() => [
     { value: "", label: "选择模型" },
@@ -329,7 +369,7 @@ export default function AnalyzePage() {
     setActiveId(nextActive.id);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const model = currentModel(activeProfile);
     if (!model.trim()) {
       showToast("请选择或填写模型");
@@ -346,12 +386,12 @@ export default function AnalyzePage() {
         : profile
     ));
     setProfiles(normalizedProfiles);
-    saveLlmProfiles(normalizedProfiles, activeProfile.id);
-    localStorage.setItem("amapKey", amapKey);
+    await saveLlmProfiles(normalizedProfiles, activeProfile.id);
+    await saveAppSettings({ amapKey });
     showToast("配置已保存并切换");
   };
 
-  const model = currentModel(activeProfile);
+  const model = activeProfile ? currentModel(activeProfile) : "";
 
   const handleTest = async () => {
     if (!model.trim()) {
@@ -380,6 +420,19 @@ export default function AnalyzePage() {
       setTesting(false);
     }
   };
+
+  if (!activeProfile) {
+    return (
+      <section className="view active" id="analyzeView">
+        <div className="llm-settings-layout">
+          <section className="analysis-panel llm-settings-panel">
+            <p>加载中…</p>
+          </section>
+        </div>
+        {toastElement}
+      </section>
+    );
+  }
 
   return (
     <section className="view active" id="analyzeView">

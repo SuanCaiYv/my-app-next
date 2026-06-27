@@ -35,6 +35,7 @@ use uuid::Uuid;
 const MAX_PHOTO_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const PHOTO_THUMB_MAX_SIZE: u32 = 720;
 const DEFAULT_LOCATION_PROMPT: &str = "请从下面这篇个人文章或随手想法中提取所有真实存在的地点。对每个地点给出尽可能详细的名称（如\"浙江省杭州市西湖区西湖\"），以便后续地理编码。只返回 JSON 数组，不要解释。格式：[{\"name\":\"...\"}]";
+const MEMORY_EMBEDDING_INPUT_VERSION: &str = "bilingual-v1";
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 #[derive(Clone)]
@@ -178,6 +179,67 @@ struct EmbeddingTestRequest {
     provider: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct LlmProfile {
+    id: String,
+    name: String,
+    #[serde(rename = "providerId")]
+    provider_id: String,
+    #[serde(rename = "apiFormat")]
+    api_format: String,
+    #[serde(rename = "apiKey")]
+    api_key: String,
+    #[serde(rename = "baseUrl")]
+    base_url: String,
+    #[serde(rename = "modelPreset")]
+    model_preset: String,
+    #[serde(rename = "customModel")]
+    custom_model: String,
+    #[serde(rename = "contextLimit")]
+    context_limit: String,
+    #[serde(rename = "embeddingModel")]
+    embedding_model: String,
+    #[serde(rename = "titlePrompt")]
+    title_prompt: String,
+    #[serde(rename = "tagsPrompt")]
+    tags_prompt: String,
+    #[serde(rename = "locationPrompt")]
+    location_prompt: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct EmbeddingSettings {
+    #[serde(rename = "providerId")]
+    provider_id: String,
+    #[serde(rename = "apiKey")]
+    api_key: String,
+    #[serde(rename = "baseUrl")]
+    base_url: String,
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveLlmSettingsRequest {
+    profiles: Vec<LlmProfile>,
+    #[serde(rename = "activeId")]
+    active_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmSettingsResponse {
+    profiles: Vec<LlmProfile>,
+    #[serde(rename = "activeId")]
+    active_id: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct AppSettings {
+    #[serde(rename = "amapKey")]
+    amap_key: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ChatMessageInput {
     role: String,
@@ -239,6 +301,7 @@ struct MemoryItem {
     id: i64,
     content: String,
     normalized_content: String,
+    retrieval_text_en: String,
     topic: String,
     domain: String,
     status: String,
@@ -354,6 +417,8 @@ struct MemorySummaryGenerateRequest {
 struct ExtractedMemory {
     content: String,
     #[serde(default)]
+    retrieval_text_en: String,
+    #[serde(default)]
     topic: String,
     #[serde(default)]
     domain: String,
@@ -417,6 +482,8 @@ struct MemoryRecallMeta {
 struct MemoryRecallScore {
     node_id: i64,
     score: f64,
+    lexical_score: f64,
+    semantic_score: f64,
     reason: String,
 }
 
@@ -424,6 +491,21 @@ struct MemoryRecallScore {
 struct MemoryRecall {
     text: String,
     meta: MemoryRecallMeta,
+}
+
+#[derive(Debug)]
+struct MemoryCandidate {
+    id: i64,
+    content: String,
+    kind: String,
+    topic: String,
+    domain: String,
+    occurred_at: String,
+    cues: String,
+    score: f64,
+    lexical_score: f64,
+    semantic_score: f64,
+    expanded: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -547,11 +629,29 @@ pub async fn run_server(data_dir: PathBuf, static_dir: PathBuf, addr: SocketAddr
             get(list_locations).post(extract_locations),
         )
         .route("/api/locations/{id}", get(get_location_detail))
-        .route("/api/posts/{id}/locations", get(list_post_locations).post(add_post_location))
-        .route("/api/posts/{id}/locations/{location_id}", delete(remove_post_location))
+        .route(
+            "/api/posts/{id}/locations",
+            get(list_post_locations).post(add_post_location),
+        )
+        .route(
+            "/api/posts/{id}/locations/{location_id}",
+            delete(remove_post_location),
+        )
         .route("/api/analyze", post(analyze))
         .route("/api/llm/test", post(test_llm_connection))
         .route("/api/embeddings/test", post(test_embedding_connection))
+        .route(
+            "/api/settings/llm",
+            get(load_llm_settings).post(save_llm_settings),
+        )
+        .route(
+            "/api/settings/embedding",
+            get(load_embedding_settings).post(save_embedding_settings),
+        )
+        .route(
+            "/api/settings/app",
+            get(load_app_settings).post(save_app_settings),
+        )
         .route("/api/chat", post(chat))
         .route("/api/memories", get(list_memories).post(create_memory))
         .route("/api/memories/extract", post(extract_memories))
@@ -723,6 +823,7 @@ fn init_db(path: &Path) -> Result<()> {
             id integer primary key,
             content text not null,
             normalized_content text not null,
+            retrieval_text_en text not null default '',
             kind text not null default 'fact',
             topic text not null default '',
             domain text not null default '',
@@ -829,8 +930,31 @@ fn init_db(path: &Path) -> Result<()> {
         create index if not exists post_locations_post_id_idx on post_locations(post_id);
         create index if not exists post_locations_location_id_idx on post_locations(location_id);
         create index if not exists locations_name_idx on locations(name);
+
+        create table if not exists settings (
+            id integer primary key check (id = 1),
+            llm_profiles text not null default '[]',
+            active_llm_profile_id text not null default '',
+            embedding_settings text not null default '{}'
+        );
         "#,
     )?;
+    let _ = conn.execute(
+        "alter table settings add column llm_profiles text not null default '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "alter table settings add column active_llm_profile_id text not null default ''",
+        [],
+    );
+    let _ = conn.execute(
+        "alter table settings add column embedding_settings text not null default '{}'",
+        [],
+    );
+    let _ = conn.execute(
+        "alter table settings add column app_settings text not null default '{}'",
+        [],
+    );
     let _ = conn.execute("alter table photos add column latitude real", []);
     let _ = conn.execute("alter table photos add column longitude real", []);
     let _ = conn.execute(
@@ -851,6 +975,10 @@ fn init_db(path: &Path) -> Result<()> {
     );
     let _ = conn.execute(
         "alter table memories add column embedding_model text not null default ''",
+        [],
+    );
+    let _ = conn.execute(
+        "alter table memory_nodes add column retrieval_text_en text not null default ''",
         [],
     );
     conn.execute(
@@ -1480,6 +1608,7 @@ async fn extract_locations(
         "你是地理信息提取助手。",
         &format!("{}\n\n{}", prompt, free_text),
         2048,
+        false,
     )
     .await?;
 
@@ -1824,6 +1953,7 @@ async fn test_llm_connection(
             "你是连通性测试助手。",
             "只回复 OK，不要添加其他内容。",
             256,
+            false,
         ),
     )
     .await
@@ -1856,15 +1986,24 @@ async fn test_embedding_connection(
         ));
     }
     let started = std::time::Instant::now();
-    let vectors = request_embeddings(
-        &state,
-        &input.api_key,
-        input.base_url.as_deref(),
-        input.provider.as_deref(),
-        &input.model,
-        &["Hello.me 语义记忆测试".to_string()],
+    let vectors = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        request_embeddings(
+            &state,
+            &input.api_key,
+            input.base_url.as_deref(),
+            input.provider.as_deref(),
+            &input.model,
+            &["Hello.me 语义记忆测试".to_string()],
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "Embedding 连接测试超时（10s），请确认模型已加载或服务可用",
+        )
+    })??;
     let dimensions = vectors.first().map(Vec::len).unwrap_or_default();
     if dimensions == 0 {
         return Err(ApiError::new(
@@ -1878,6 +2017,151 @@ async fn test_embedding_connection(
         "dimensions": dimensions,
         "elapsed_ms": started.elapsed().as_millis(),
     })))
+}
+
+async fn load_llm_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<LlmSettingsResponse>> {
+    require_owner(&state, &headers)?;
+    let conn = Connection::open(&state.db_path)?;
+    let row: Result<(String, String), _> = conn.query_row(
+        "select coalesce(llm_profiles, '[]'), coalesce(active_llm_profile_id, '') from settings where id = 1",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    );
+    let (profiles_json, active_id) = match row {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => ("[]".to_string(), "".to_string()),
+        Err(error) => return Err(error.into()),
+    };
+    let profiles: Vec<LlmProfile> = serde_json::from_str(&profiles_json).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("LLM 配置解析失败：{error}"),
+        )
+    })?;
+    Ok(Json(LlmSettingsResponse {
+        profiles,
+        active_id,
+    }))
+}
+
+async fn save_llm_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SaveLlmSettingsRequest>,
+) -> ApiResult<Json<Value>> {
+    require_owner(&state, &headers)?;
+    let profiles_json = serde_json::to_string(&input.profiles).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("LLM 配置序列化失败：{error}"),
+        )
+    })?;
+    let conn = Connection::open(&state.db_path)?;
+    conn.execute(
+        "insert into settings (id, llm_profiles, active_llm_profile_id) values (1, ?1, ?2)
+         on conflict(id) do update set llm_profiles = excluded.llm_profiles, active_llm_profile_id = excluded.active_llm_profile_id",
+        params![profiles_json, input.active_id],
+    )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn load_embedding_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<EmbeddingSettings>> {
+    require_owner(&state, &headers)?;
+    let conn = Connection::open(&state.db_path)?;
+    Ok(Json(read_embedding_settings(&conn)?))
+}
+
+fn read_embedding_settings(conn: &Connection) -> ApiResult<EmbeddingSettings> {
+    let row: Result<String, _> = conn.query_row(
+        "select coalesce(embedding_settings, '{}') from settings where id = 1",
+        [],
+        |row| row.get(0),
+    );
+    let json = match row {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => "{}".to_string(),
+        Err(error) => return Err(error.into()),
+    };
+    let settings: EmbeddingSettings = serde_json::from_str(&json).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Embedding 配置解析失败：{error}"),
+        )
+    })?;
+    Ok(settings)
+}
+
+async fn save_embedding_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<EmbeddingSettings>,
+) -> ApiResult<Json<Value>> {
+    require_owner(&state, &headers)?;
+    let json = serde_json::to_string(&input).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Embedding 配置序列化失败：{error}"),
+        )
+    })?;
+    let conn = Connection::open(&state.db_path)?;
+    conn.execute(
+        "insert into settings (id, embedding_settings) values (1, ?1)
+         on conflict(id) do update set embedding_settings = excluded.embedding_settings",
+        params![json],
+    )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn load_app_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<AppSettings>> {
+    require_owner(&state, &headers)?;
+    let conn = Connection::open(&state.db_path)?;
+    let row: Result<String, _> = conn.query_row(
+        "select coalesce(app_settings, '{}') from settings where id = 1",
+        [],
+        |row| row.get(0),
+    );
+    let json = match row {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => "{}".to_string(),
+        Err(error) => return Err(error.into()),
+    };
+    let settings: AppSettings = serde_json::from_str(&json).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("应用配置解析失败：{error}"),
+        )
+    })?;
+    Ok(Json(settings))
+}
+
+async fn save_app_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<AppSettings>,
+) -> ApiResult<Json<Value>> {
+    require_owner(&state, &headers)?;
+    let json = serde_json::to_string(&input).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("应用配置序列化失败：{error}"),
+        )
+    })?;
+    let conn = Connection::open(&state.db_path)?;
+    conn.execute(
+        "insert into settings (id, app_settings) values (1, ?1)
+         on conflict(id) do update set app_settings = excluded.app_settings",
+        params![json],
+    )?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn chat(
@@ -2290,7 +2574,7 @@ async fn list_memories(
     require_owner(&state, &headers)?;
     let conn = Connection::open(&state.db_path)?;
     let mut stmt = conn.prepare(
-        "select id, content, normalized_content, topic, domain, status, relation,
+        "select id, content, normalized_content, retrieval_text_en, topic, domain, status, relation,
                 related_memory_id, source_session_id, supersedes_id, mention_count,
                 confidence, last_mentioned_at, valid_from, occurred_at, created_at, updated_at,
                 kind, time_precision, importance, emotion_weight, strength, last_activated_at
@@ -2312,14 +2596,45 @@ async fn preview_memory_recall(
 ) -> ApiResult<Json<Value>> {
     require_owner(&state, &headers)?;
     let query = required_trimmed(Some(&input.query), "请输入召回问题")?;
-    let conn = Connection::open(&state.db_path)?;
     let plan = local_retrieval_plan(query);
+    let embedding_settings = {
+        let conn = Connection::open(&state.db_path)?;
+        read_embedding_settings(&conn).unwrap_or_default()
+    };
+    let query_embedding = if !embedding_settings.base_url.trim().is_empty()
+        && !embedding_settings.model.trim().is_empty()
+    {
+        match ensure_memory_embeddings(
+            &state,
+            &embedding_settings.api_key,
+            Some(&embedding_settings.base_url),
+            Some(&embedding_settings.provider_id),
+            &embedding_settings.model,
+            query,
+        )
+        .await
+        {
+            Ok(vector) => Some(vector),
+            Err(error) => {
+                warn!(
+                    error = %error.message,
+                    "semantic recall preview unavailable; using lexical recall"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let conn = Connection::open(&state.db_path)?;
     let recall = recall_memories(
         &conn,
         query,
         input.budget_tokens.unwrap_or(800).clamp(200, 4000),
-        None,
-        None,
+        query_embedding.as_deref(),
+        query_embedding
+            .as_ref()
+            .map(|_| embedding_settings.model.as_str()),
         Some(&plan),
     )?;
     let nodes = recall
@@ -2372,13 +2687,20 @@ async fn create_memory(
     let conn = Connection::open(&state.db_path)?;
     conn.execute(
         "insert into memory_nodes
-         (content, normalized_content, kind, topic, domain, status, relation, related_memory_id,
+         (content, normalized_content, retrieval_text_en, kind, topic, domain, status, relation, related_memory_id,
           source_session_id, mention_count, confidence, importance, emotion_weight, strength,
           last_mentioned_at, last_activated_at, valid_from, occurred_at, time_precision, created_at, updated_at)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11, ?12, 1.0, ?13, ?13, ?13, ?14, ?15, ?13, ?13)",
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13, 1.0, ?14, ?14, ?14, ?15, ?16, ?14, ?14)",
         params![
             content,
             normalize_memory_content(&content),
+            build_memory_retrieval_text_en(
+                &content,
+                input.topic.as_deref().unwrap_or("").trim(),
+                input.domain.as_deref().unwrap_or("").trim(),
+                input.cues.as_deref().unwrap_or(&[]),
+                ""
+            ),
             input.kind.as_deref().unwrap_or("fact"),
             input.topic.as_deref().unwrap_or("").trim(),
             input.domain.as_deref().unwrap_or("").trim(),
@@ -2428,6 +2750,11 @@ async fn update_memory(
     let relation = input.relation.as_deref().unwrap_or(&current.relation);
     validate_memory_status(status)?;
     let now = Utc::now().to_rfc3339();
+    let next_topic = input.topic.as_deref().unwrap_or(&current.topic).trim();
+    let next_domain = input.domain.as_deref().unwrap_or(&current.domain).trim();
+    let next_cues = input.cues.as_deref().unwrap_or(&current.cues);
+    let next_retrieval_text_en =
+        build_memory_retrieval_text_en(&content, next_topic, next_domain, next_cues, "");
 
     if current.status == "pending" && status == "active" {
         match relation {
@@ -2481,18 +2808,19 @@ async fn update_memory(
     }
 
     conn.execute(
-        "update memory_nodes set content = ?1, normalized_content = ?2, topic = ?3, domain = ?4,
-         status = ?5, relation = ?6, related_memory_id = ?7, confidence = ?8,
-         valid_from = case when status = 'pending' and ?5 = 'active' then ?9 else valid_from end,
-         occurred_at = ?10, kind = ?11, time_precision = ?12, importance = ?13, emotion_weight = ?14,
-         embedding = case when normalized_content != ?2 or topic != ?3 or domain != ?4 then '' else embedding end,
-         embedding_model = case when normalized_content != ?2 or topic != ?3 or domain != ?4 then '' else embedding_model end,
-         updated_at = ?9 where id = ?15",
+        "update memory_nodes set content = ?1, normalized_content = ?2, retrieval_text_en = ?3, topic = ?4, domain = ?5,
+         status = ?6, relation = ?7, related_memory_id = ?8, confidence = ?9,
+         valid_from = case when status = 'pending' and ?6 = 'active' then ?10 else valid_from end,
+         occurred_at = ?11, kind = ?12, time_precision = ?13, importance = ?14, emotion_weight = ?15,
+         embedding = case when normalized_content != ?2 or retrieval_text_en != ?3 or topic != ?4 or domain != ?5 then '' else embedding end,
+         embedding_model = case when normalized_content != ?2 or retrieval_text_en != ?3 or topic != ?4 or domain != ?5 then '' else embedding_model end,
+         updated_at = ?10 where id = ?16",
         params![
             content,
             normalize_memory_content(&content),
-            input.topic.as_deref().unwrap_or(&current.topic).trim(),
-            input.domain.as_deref().unwrap_or(&current.domain).trim(),
+            next_retrieval_text_en,
+            next_topic,
+            next_domain,
             status,
             relation,
             input.related_memory_id.or(current.related_memory_id),
@@ -2692,7 +3020,9 @@ async fn extract_memories(
     let prompt = format!(
         "从下面选中的问答和附件资料中提取值得长期保存的稳定事实、偏好、经历或知识内容。\
          附件中的第一人称经历可以作为用户经历；普通资料内容应按其实际主题记录，不要擅自改写成用户偏好。\
-         不要提取临时任务、猜测或助手自己的话。\n\
+         不要提取临时任务、猜测或助手自己的话。\
+         禁止输出解释、分析、总结、推理过程或 Markdown。只能输出合法 JSON。\
+         所有推理都在内部完成，不要输出思考过程。\n\
          每条记忆必须尽量填写 occurred_at，表示事实、经历或资料内容发生的时间。\
          优先识别正文中的明确日期、年份、年龄和“小时候”“上大学时”等相对时间；\
          可结合现有记忆中的出生年份、年龄、求学阶段等信息推断，但不要在依据不足时编造精确日期。\
@@ -2703,13 +3033,16 @@ async fn extract_memories(
          importance 和 emotion_weight 是 0 到 1。cues 是编码线索数组，\
          cue_type 使用 person、place、time、sensory、emotion、body、goal、topic、entity，\
          specificity 是线索独特性（0 到 1）。只提取原文有依据的线索。\
+         retrieval_text_en 是仅用于语义检索的英文影子文本：用自然英文忠实改写 content、topic、domain 和关键 cues，\
+         补足中文口语、省略称谓和近义表达，但不要添加原文没有的新事实。\
          topic 表示标签名，domain 表示分类名，两者都必须使用简洁自然的中文。\
          分类尽量复用知识、个人、偏好、经历、生活、工作、教育、健康、家庭、人际关系、技术、旅行、财务、情绪、兴趣、其他等稳定中文分类；\
          不要输出 knowledge、personal、preference 等英文分类或英文标签。\
          来自文章时同时填写 source_post_id；若内容综合自多篇文章，选择最直接支持该记忆的一篇。\
-         对照现有记忆判断 relation，只能为 new、duplicate、reinforce、update、conflict。\n\
-         related_memory_id 仅在关联已有记忆时填写。返回 JSON 数组，不要 Markdown：\n\
-         [{{\"content\":\"...\",\"kind\":\"episode\",\"topic\":\"家乡记忆\",\"domain\":\"经历\",\"relation\":\"new\",\"related_memory_id\":null,\"confidence\":0.8,\"importance\":0.7,\"emotion_weight\":0.6,\"occurred_at\":\"2024-10-01T12:00:00Z\",\"time_precision\":\"exact\",\"cues\":[{{\"cue_type\":\"place\",\"value\":\"西湖\",\"specificity\":0.8}}],\"source_post_id\":12}}]\n\
+         对照现有记忆判断 relation，只能为 new、duplicate、reinforce、update、conflict。\
+         related_memory_id 仅在关联已有记忆时填写。\n\
+         输出格式必须是合法 JSON 对象，含一个 memories 数组。示例如下（不要 Markdown 代码块）：\n\
+         {{\"memories\": [{{\"content\":\"...\",\"retrieval_text_en\":\"A faithful English retrieval paraphrase for semantic search.\",\"kind\":\"episode\",\"topic\":\"家乡记忆\",\"domain\":\"经历\",\"relation\":\"new\",\"related_memory_id\":null,\"confidence\":0.8,\"importance\":0.7,\"emotion_weight\":0.6,\"occurred_at\":\"2024-10-01T12:00:00Z\",\"time_precision\":\"exact\",\"cues\":[{{\"cue_type\":\"place\",\"value\":\"西湖\",\"specificity\":0.8}}],\"source_post_id\":12}}]}}\n\
          现有记忆：\n{}\n\n选中问答：\n{}\n\n附件资料：\n{}",
         active,
         if transcript.is_empty() { "无" } else { &transcript },
@@ -2721,9 +3054,10 @@ async fn extract_memories(
         input.base_url.as_deref(),
         &input.model,
         input.provider.as_deref(),
-        "你是谨慎的长期记忆整理器。只输出合法 JSON。",
+        "你是谨慎的长期记忆整理器。你的唯一任务是输出合法 JSON。禁止输出任何解释、分析、总结、推理过程或 Markdown。",
         &prompt,
-        2200,
+        4096,
+        true,
     )
     .await?;
     let candidates = parse_extracted_memories(&raw)?;
@@ -2782,19 +3116,29 @@ async fn extract_memories(
             "new".to_string()
         };
         let related_memory_id = exact_active_id.or(candidate.related_memory_id);
+        let topic = localize_memory_label(candidate.topic.trim());
+        let domain = localize_memory_label(candidate.domain.trim());
+        let retrieval_text_en = build_memory_retrieval_text_en(
+            content,
+            &topic,
+            &domain,
+            &candidate.cues,
+            &candidate.retrieval_text_en,
+        );
         conn.execute(
             "insert into memory_nodes
-             (content, normalized_content, kind, topic, domain, status, relation, related_memory_id,
+             (content, normalized_content, retrieval_text_en, kind, topic, domain, status, relation, related_memory_id,
               source_session_id, source_fingerprint, mention_count, confidence, importance, emotion_weight,
               strength, last_mentioned_at, last_activated_at, valid_from, occurred_at, time_precision, created_at, updated_at)
-             values (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, 1, ?10, ?11, ?12,
-                     1.0, ?13, ?13, ?13, ?14, ?15, ?13, ?13)",
+             values (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13,
+                     1.0, ?14, ?14, ?14, ?15, ?16, ?14, ?14)",
             params![
                 content,
                 normalized,
+                retrieval_text_en,
                 validate_memory_kind_or_default(&candidate.kind),
-                localize_memory_label(candidate.topic.trim()),
-                localize_memory_label(candidate.domain.trim()),
+                topic,
+                domain,
                 relation,
                 related_memory_id,
                 input.session_id,
@@ -3006,6 +3350,7 @@ async fn generate_memory_summary(
         "你是保守、可审计的记忆摘要器。",
         &prompt,
         max_tokens,
+        false,
     )
     .await?;
     let conn = Connection::open(&state.db_path)?;
@@ -3157,26 +3502,27 @@ fn memory_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryItem> {
         id: row.get(0)?,
         content: row.get(1)?,
         normalized_content: row.get(2)?,
-        topic: row.get(3)?,
-        domain: row.get(4)?,
-        status: row.get(5)?,
-        relation: row.get(6)?,
-        related_memory_id: row.get(7)?,
-        source_session_id: row.get(8)?,
-        supersedes_id: row.get(9)?,
-        mention_count: row.get(10)?,
-        confidence: row.get(11)?,
-        last_mentioned_at: row.get(12)?,
-        valid_from: row.get(13)?,
-        occurred_at: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        kind: row.get(17)?,
-        time_precision: row.get(18)?,
-        importance: row.get(19)?,
-        emotion_weight: row.get(20)?,
-        strength: row.get(21)?,
-        last_activated_at: row.get(22)?,
+        retrieval_text_en: row.get(3)?,
+        topic: row.get(4)?,
+        domain: row.get(5)?,
+        status: row.get(6)?,
+        relation: row.get(7)?,
+        related_memory_id: row.get(8)?,
+        source_session_id: row.get(9)?,
+        supersedes_id: row.get(10)?,
+        mention_count: row.get(11)?,
+        confidence: row.get(12)?,
+        last_mentioned_at: row.get(13)?,
+        valid_from: row.get(14)?,
+        occurred_at: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        kind: row.get(18)?,
+        time_precision: row.get(19)?,
+        importance: row.get(20)?,
+        emotion_weight: row.get(21)?,
+        strength: row.get(22)?,
+        last_activated_at: row.get(23)?,
         cues: vec![],
         sources: vec![],
         edges: vec![],
@@ -3199,7 +3545,7 @@ fn memory_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemorySu
 
 fn load_memory(conn: &Connection, id: i64) -> ApiResult<MemoryItem> {
     conn.query_row(
-        "select id, content, normalized_content, topic, domain, status, relation,
+        "select id, content, normalized_content, retrieval_text_en, topic, domain, status, relation,
                 related_memory_id, source_session_id, supersedes_id, mention_count,
                 confidence, last_mentioned_at, valid_from, occurred_at, created_at, updated_at,
                 kind, time_precision, importance, emotion_weight, strength, last_activated_at
@@ -3237,15 +3583,24 @@ fn sync_summary_node(conn: &Connection, summary: &MemorySummaryItem) -> ApiResul
         "pending"
     };
     conn.execute(
-        "insert into memory_nodes(id, content, normalized_content, kind, topic, domain, status, relation,
+        "insert into memory_nodes(id, content, normalized_content, retrieval_text_en, kind, topic, domain, status, relation,
           mention_count, confidence, importance, emotion_weight, strength, last_mentioned_at, last_activated_at,
           valid_from, occurred_at, time_precision, created_at, updated_at)
-         values(?1, ?2, ?3, 'schema', ?4, ?5, ?6, 'new', 1, 0.8, 0.7, 0.0, 1.0, ?7, ?7, ?8, ?8, 'unknown', ?8, ?7)
+         values(?1, ?2, ?3, ?4, 'schema', ?5, ?6, ?7, 'new', 1, 0.8, 0.7, 0.0, 1.0, ?8, ?8, ?9, ?9, 'unknown', ?9, ?8)
          on conflict(id) do update set content=excluded.content, normalized_content=excluded.normalized_content,
-          topic=excluded.topic, domain=excluded.domain, status=excluded.status, updated_at=excluded.updated_at",
-        params![node_id, summary.content, normalize_memory_content(&summary.content),
+          retrieval_text_en=excluded.retrieval_text_en, topic=excluded.topic, domain=excluded.domain,
+          status=excluded.status, embedding='', embedding_model='', updated_at=excluded.updated_at",
+        params![
+            node_id,
+            summary.content,
+            normalize_memory_content(&summary.content),
+            build_memory_retrieval_text_en(&summary.content, &summary.title, &summary.kind, &[], ""),
             if summary.kind == "topic" { &summary.title } else { "" },
-            if summary.kind == "domain" { &summary.title } else { "" }, status, summary.updated_at, summary.created_at],
+            if summary.kind == "domain" { &summary.title } else { "" },
+            status,
+            summary.updated_at,
+            summary.created_at
+        ],
     )?;
     conn.execute(
         "delete from memory_edges where source_id=?1 and relation='summarizes'",
@@ -3451,11 +3806,161 @@ fn validate_summary_kind(kind: &str) -> ApiResult<()> {
 }
 
 fn normalize_memory_content(content: &str) -> String {
-    content
+    let normalized = content
         .chars()
         .filter(|ch| ch.is_alphanumeric())
         .flat_map(char::to_lowercase)
+        .collect::<String>();
+    normalize_memory_synonyms(&normalized)
+}
+
+fn normalize_memory_synonyms(content: &str) -> String {
+    [
+        ("爸爸妈妈", "父母"),
+        ("父亲母亲", "父母"),
+        ("爸爸和妈妈", "父母"),
+        ("父亲和母亲", "父母"),
+        ("爸妈", "父母"),
+        ("爹妈", "父母"),
+        ("双亲", "父母"),
+        ("老爸老妈", "父母"),
+    ]
+    .iter()
+    .fold(content.to_string(), |value, (from, to)| {
+        value.replace(from, to)
+    })
+}
+
+fn memory_embedding_key(model: &str) -> String {
+    format!("{}::{}", model.trim(), MEMORY_EMBEDDING_INPUT_VERSION)
+}
+
+fn memory_query_embedding_input(query: &str) -> String {
+    let hints = english_retrieval_hints(query);
+    if hints.is_empty() {
+        format!("English semantic retrieval query for a personal memory archive.\nChinese query: {query}")
+    } else {
+        format!(
+            "English semantic retrieval query for a personal memory archive.\nEnglish hints: {}\nChinese query: {query}",
+            hints.join("; ")
+        )
+    }
+}
+
+fn memory_embedding_input(
+    content: &str,
+    topic: &str,
+    domain: &str,
+    cues_text: &str,
+    retrieval_text_en: &str,
+) -> String {
+    let fallback = build_memory_retrieval_text_en(
+        content,
+        topic,
+        domain,
+        &parse_cues_text(cues_text),
+        retrieval_text_en,
+    );
+    format!(
+        "English retrieval text:\n{}\n\nChinese original memory:\n{}\n\nChinese metadata: domain={}, topic={}, cues={}",
+        fallback, content, domain, topic, cues_text
+    )
+}
+
+fn build_memory_retrieval_text_en(
+    content: &str,
+    topic: &str,
+    domain: &str,
+    cues: &[MemoryCue],
+    provided: &str,
+) -> String {
+    let provided = provided.trim();
+    let mut parts = Vec::new();
+    if !provided.is_empty() {
+        parts.push(provided.to_string());
+    }
+    parts.extend(english_retrieval_hints(&format!(
+        "{} {} {} {}",
+        domain,
+        topic,
+        cues.iter()
+            .map(|cue| format!("{}:{}", cue.cue_type, cue.value))
+            .collect::<Vec<_>>()
+            .join(" "),
+        content
+    )));
+    if !topic.trim().is_empty() {
+        parts.push(format!("topic: {}", topic));
+    }
+    if !domain.trim().is_empty() {
+        parts.push(format!("domain: {}", domain));
+    }
+    if !cues.is_empty() {
+        parts.push(format!(
+            "retrieval cues: {}",
+            cues.iter()
+                .map(|cue| format!("{}: {}", cue.cue_type, cue.value))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    parts.dedup();
+    if parts.is_empty() {
+        "personal memory; semantic search; Chinese original retained".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn parse_cues_text(cues_text: &str) -> Vec<MemoryCue> {
+    cues_text
+        .split_whitespace()
+        .filter_map(|part| {
+            let (cue_type, value) = part.split_once(':')?;
+            Some(MemoryCue {
+                cue_type: cue_type.to_string(),
+                value: value.to_string(),
+                specificity: 0.6,
+            })
+        })
         .collect()
+}
+
+fn english_retrieval_hints(text: &str) -> Vec<String> {
+    let normalized = normalize_memory_content(text);
+    [
+        ("父母", "parents; father and mother; mom and dad; family"),
+        ("父亲", "father; dad; parent"),
+        ("爸爸", "father; dad; parent"),
+        ("母亲", "mother; mom; parent"),
+        ("妈妈", "mother; mom; parent"),
+        ("家庭", "family; home; relatives"),
+        ("家人", "family members; relatives"),
+        ("照片", "photo; photograph; picture; old photos"),
+        ("回忆", "memory; recollection; remembering the past"),
+        ("小时候", "childhood; when I was a child"),
+        ("童年", "childhood"),
+        ("家乡", "hometown; home village; birthplace"),
+        ("吉林", "Jilin; northeast China"),
+        ("打工", "working away from home; migrant work; manual work"),
+        ("工作", "work; job; career"),
+        ("旅行", "travel; trip; journey"),
+        ("朋友", "friend; friendship"),
+        ("学校", "school; education"),
+        ("大学", "college; university"),
+        ("情绪", "emotion; feeling"),
+        ("难过", "sadness; feeling sad"),
+        ("开心", "happiness; feeling happy"),
+        ("喜欢", "preference; likes"),
+        ("偏好", "preference"),
+        ("健康", "health"),
+        ("身体", "body; physical condition"),
+        ("地点", "place; location"),
+        ("时间", "time; date; period"),
+    ]
+    .iter()
+    .filter_map(|(needle, hint)| normalized.contains(needle).then_some((*hint).to_string()))
+    .collect()
 }
 
 fn localize_memory_label(value: &str) -> String {
@@ -3595,6 +4100,14 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f64 {
     }
 }
 
+fn semantic_relevance_signal(cosine: f64) -> f64 {
+    if cosine <= 0.32 {
+        0.0
+    } else {
+        ((cosine - 0.32) / 0.68).clamp(0.0, 1.0)
+    }
+}
+
 async fn ensure_memory_embeddings(
     state: &AppState,
     api_key: &str,
@@ -3603,27 +4116,31 @@ async fn ensure_memory_embeddings(
     model: &str,
     query: &str,
 ) -> ApiResult<Vec<f32>> {
+    let embedding_key = memory_embedding_key(model);
+    let query_input = memory_query_embedding_input(query);
     let missing = {
         let conn = Connection::open(&state.db_path)?;
         let mut stmt = conn.prepare(
-            "select id, content, topic, domain from memory_nodes
+            "select id, content, topic, domain, retrieval_text_en,
+                    coalesce((select group_concat(c.cue_type || ':' || c.value, ' ') from memory_cues c where c.memory_id=memory_nodes.id), '')
+             from memory_nodes
              where status = 'active' and (embedding = '' or embedding_model != ?1)",
         )?;
-        let rows = stmt.query_map(params![model], |row| {
+        let rows = stmt.query_map(params![embedding_key], |row| {
+            let content: String = row.get(1)?;
+            let topic: String = row.get(2)?;
+            let domain: String = row.get(3)?;
+            let retrieval_text_en: String = row.get(4)?;
+            let cues: String = row.get(5)?;
             Ok((
                 row.get::<_, i64>(0)?,
-                format!(
-                    "{} {} {}",
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(1)?
-                ),
+                memory_embedding_input(&content, &topic, &domain, &cues, &retrieval_text_en),
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut inputs = Vec::with_capacity(missing.len() + 1);
-    inputs.push(query.to_string());
+    inputs.push(query_input);
     inputs.extend(missing.iter().map(|(_, text)| text.clone()));
 
     let mut vectors =
@@ -3642,7 +4159,7 @@ async fn ensure_memory_embeddings(
                 "update memory_nodes set embedding = ?1, embedding_model = ?2 where id = ?3",
                 params![
                     serde_json::to_string(&vector).unwrap_or_else(|_| "[]".to_string()),
-                    model,
+                    embedding_key,
                     id
                 ],
             )?;
@@ -3755,6 +4272,7 @@ fn recall_memories(
     let plan = plan
         .cloned()
         .unwrap_or_else(|| local_retrieval_plan(query_text));
+    let expected_embedding_key = embedding_model.map(memory_embedding_key);
     let search_text = format!("{} {} {}", query_text, plan.goal, plan.cues.join(" "));
     let query = text_bigrams(&search_text);
     let now = Utc::now();
@@ -3765,6 +4283,7 @@ fn recall_memories(
                 coalesce((select group_concat(c.cue_type || ':' || c.value, ' ') from memory_cues c where c.memory_id=n.id), '')
          from memory_nodes n where n.status = 'active'"
     )?;
+    let semantic_enabled = query_embedding.is_some();
     let mut candidates = stmt
         .query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -3782,37 +4301,39 @@ fn recall_memories(
             let stored_model: String = row.get(12)?;
             let cues: String = row.get(13)?;
             let lexical = relevance_score(&query, &format!("{domain} {topic} {content} {cues}"));
-            let semantic =
-                if query_embedding.is_some() && embedding_model == Some(stored_model.as_str()) {
-                    serde_json::from_str::<Vec<f32>>(&raw_embedding)
-                        .ok()
-                        .and_then(|vector| query_embedding.map(|q| cosine_similarity(q, &vector)))
-                        .unwrap_or(0.0)
-                        .max(0.0)
-                } else {
-                    0.0
-                };
+            let semantic = if query_embedding.is_some()
+                && expected_embedding_key.as_deref() == Some(stored_model.as_str())
+            {
+                serde_json::from_str::<Vec<f32>>(&raw_embedding)
+                    .ok()
+                    .and_then(|vector| query_embedding.map(|q| cosine_similarity(q, &vector)))
+                    .unwrap_or(0.0)
+                    .max(0.0)
+            } else {
+                0.0
+            };
             let age_days = DateTime::parse_from_rfc3339(&activated)
                 .ok()
                 .map(|date| (now - date.with_timezone(&Utc)).num_days().max(0) as f64)
                 .unwrap_or(365.0);
             let accessibility = 1.0 / (1.0 + age_days / 180.0);
-            let match_score = if query_embedding.is_some() {
-                semantic * 0.58 + lexical * 0.42
+            let semantic_signal = semantic_relevance_signal(semantic);
+            let match_score = if semantic_enabled {
+                semantic_signal * 0.82 + lexical * 0.18
             } else {
                 lexical
             };
             let score = if match_score > 0.0 {
-                match_score * 0.68
-                    + confidence * 0.08
-                    + importance * 0.09
-                    + emotion * 0.05
-                    + strength.min(10.0) / 10.0 * 0.05
-                    + accessibility * 0.05
+                match_score * 0.86
+                    + confidence * 0.03
+                    + importance * 0.04
+                    + emotion * 0.025
+                    + strength.min(10.0) / 10.0 * 0.02
+                    + accessibility * 0.025
             } else {
                 0.0
             };
-            Ok((
+            Ok(MemoryCandidate {
                 id,
                 content,
                 kind,
@@ -3821,18 +4342,31 @@ fn recall_memories(
                 occurred_at,
                 cues,
                 score,
-                false,
-            ))
+                lexical_score: lexical,
+                semantic_score: semantic,
+                expanded: false,
+            })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     candidates.retain(|candidate| {
-        candidate.7 > 0.0 && !plan.exclusions.iter().any(|x| candidate.1.contains(x))
+        let direct_match = if semantic_enabled {
+            candidate.lexical_score > 0.0
+                || semantic_relevance_signal(candidate.semantic_score) > 0.0
+        } else {
+            candidate.lexical_score > 0.0
+        };
+        direct_match
+            && candidate.score > 0.0
+            && !plan
+                .exclusions
+                .iter()
+                .any(|x| candidate.content.contains(x))
     });
-    candidates.sort_by(|a, b| b.7.total_cmp(&a.7));
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
     let seed_ids = candidates
         .iter()
         .take(8)
-        .map(|item| item.0)
+        .map(|item| item.id)
         .collect::<Vec<_>>();
     let mut expanded_ids = Vec::new();
     for seed_id in &seed_ids {
@@ -3859,34 +4393,36 @@ fn recall_memories(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let seed_score = candidates
             .iter()
-            .find(|item| item.0 == *seed_id)
-            .map(|x| x.7)
+            .find(|item| item.id == *seed_id)
+            .map(|x| x.score)
             .unwrap_or(0.0);
         for (id, weight, content, kind, topic, domain, occurred, cues) in expanded {
-            if candidates.iter().any(|item| item.0 == id) {
+            if candidates.iter().any(|item| item.id == id) {
                 continue;
             }
             expanded_ids.push(id);
-            candidates.push((
+            candidates.push(MemoryCandidate {
                 id,
                 content,
                 kind,
                 topic,
                 domain,
-                occurred,
+                occurred_at: occurred,
                 cues,
-                seed_score * weight * 0.72,
-                true,
-            ));
+                score: seed_score * weight * 0.48,
+                lexical_score: 0.0,
+                semantic_score: 0.0,
+                expanded: true,
+            });
         }
     }
-    candidates.sort_by(|a, b| b.7.total_cmp(&a.7));
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
     let char_budget = budget_tokens.saturating_mul(3);
     let mut used = 0usize;
     let mut lines = Vec::new();
     let mut meta = MemoryRecallMeta {
-        semantic: query_embedding.is_some(),
-        mode: if query_embedding.is_some() {
+        semantic: semantic_enabled,
+        mode: if semantic_enabled {
             "hybrid"
         } else {
             "lexical"
@@ -3901,48 +4437,65 @@ fn recall_memories(
     let mut seen_topics = HashSet::new();
     let mut selected = Vec::new();
     let mut timeline = Vec::new();
-    for (id, content, kind, topic, domain, occurred_at, cues, score, expanded) in candidates {
-        let group = if topic.is_empty() {
-            domain.clone()
+    let effective_breadth = if semantic_enabled {
+        plan.breadth.max(5)
+    } else {
+        plan.breadth
+    };
+    for candidate in candidates {
+        let group = if candidate.topic.is_empty() {
+            candidate.domain.clone()
         } else {
-            topic.clone()
+            candidate.topic.clone()
         };
-        if !seen_topics.contains(&group) && seen_topics.len() >= plan.breadth {
+        if !seen_topics.contains(&group) && seen_topics.len() >= effective_breadth {
             continue;
         }
-        let cue_text = if plan.depth == "deep" && !cues.is_empty() {
-            format!("；线索：{cues}")
+        let cue_text = if plan.depth == "deep" && !candidate.cues.is_empty() {
+            format!("；线索：{}", candidate.cues)
         } else {
             String::new()
         };
         let line = format!(
-            "[记忆#{id}：{kind} / {domain} / {topic} / 发生于 {occurred_at}{cue_text}] {content}"
+            "[记忆#{}：{} / {} / {} / 发生于 {}{}] {}",
+            candidate.id,
+            candidate.kind,
+            candidate.domain,
+            candidate.topic,
+            candidate.occurred_at,
+            cue_text,
+            candidate.content
         );
         if used + line.chars().count() > char_budget {
             continue;
         }
         used += line.chars().count();
         seen_topics.insert(group);
-        selected.push(id);
+        selected.push(candidate.id);
         meta.scores.push(MemoryRecallScore {
-            node_id: id,
-            score,
-            reason: if expanded {
+            node_id: candidate.id,
+            score: candidate.score,
+            lexical_score: candidate.lexical_score,
+            semantic_score: candidate.semantic_score,
+            reason: if candidate.expanded {
                 "关联扩散"
+            } else if semantic_enabled && semantic_relevance_signal(candidate.semantic_score) > 0.0
+            {
+                "语义匹配"
             } else {
                 "线索匹配"
             }
             .to_string(),
         });
-        if kind == "schema" {
+        if candidate.kind == "schema" {
             meta.topics += 1;
         } else {
             meta.memories += 1;
         }
-        if expanded {
-            meta.expanded_node_ids.push(id);
+        if candidate.expanded {
+            meta.expanded_node_ids.push(candidate.id);
         }
-        timeline.push((occurred_at, line));
+        timeline.push((candidate.occurred_at, line));
     }
     timeline.sort_by(|a, b| a.0.cmp(&b.0));
     if !timeline.is_empty() {
@@ -4034,6 +4587,7 @@ async fn plan_memory_retrieval(
         "你是记忆检索控制器，不回答问题，只生成保守的检索计划。",
         &prompt,
         220,
+        true,
     )
     .await?;
     let mut plan: MemoryRetrievalPlan =
@@ -4100,12 +4654,40 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 }
 
 fn parse_extracted_memories(raw: &str) -> ApiResult<Vec<ExtractedMemory>> {
-    serde_json::from_str(strip_json_fence(raw)).map_err(|error| {
-        ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("模型返回的记忆格式无法解析：{error}"),
-        )
-    })
+    let cleaned = strip_json_fence(raw).trim();
+
+    // Try the wrapped object format first: {"memories": [...]}
+    if cleaned.starts_with('{') {
+        if let Ok(wrapped) = serde_json::from_str::<Value>(cleaned) {
+            if let Some(array) = wrapped.get("memories").and_then(Value::as_array) {
+                let memories: Vec<ExtractedMemory> = array
+                    .iter()
+                    .filter_map(|value| serde_json::from_value(value.clone()).ok())
+                    .collect();
+                if !memories.is_empty() || array.is_empty() {
+                    return Ok(memories);
+                }
+            }
+        }
+    }
+
+    // Fall back to a raw JSON array.
+    serde_json::from_str::<Vec<ExtractedMemory>>(cleaned)
+        .ok()
+        .or_else(|| {
+            let start = cleaned.find('[')?;
+            let end = cleaned.rfind(']')?;
+            if start >= end {
+                return None;
+            }
+            serde_json::from_str::<Vec<ExtractedMemory>>(&cleaned[start..=end]).ok()
+        })
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_GATEWAY, format_memory_parse_error(raw)))
+}
+
+fn format_memory_parse_error(raw: &str) -> String {
+    let preview = raw.chars().take(400).collect::<String>();
+    format!("模型返回的记忆格式无法解析。原始响应：{preview}")
 }
 
 fn extracted_memory_occurred_at(
@@ -4137,6 +4719,7 @@ async fn call_text_llm(
     system: &str,
     prompt: &str,
     max_tokens: usize,
+    json_mode: bool,
 ) -> ApiResult<String> {
     if model.trim().is_empty() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "请填写模型名"));
@@ -4188,6 +4771,11 @@ async fn call_text_llm(
             "max_tokens": max_tokens,
         });
         apply_openai_compatible_provider_options(&mut payload, provider);
+        if provider == Some("ollama") {
+            payload["format"] = json!("json");
+        } else if json_mode {
+            payload["response_format"] = json!({ "type": "json_object" });
+        }
         let response = with_llm_auth(
             state.http.post(openai_chat_endpoint(base_url)),
             provider,
@@ -4667,6 +5255,7 @@ mod tests {
                 id integer primary key autoincrement,
                 content text not null,
                 normalized_content text not null,
+                retrieval_text_en text not null default '',
                 topic text not null default '',
                 domain text not null default '',
                 status text not null default 'pending',
@@ -4791,6 +5380,7 @@ mod tests {
         let post_dates = HashMap::from([(12, "2025-06-01T12:00:00Z".to_string())]);
         let event_candidate = ExtractedMemory {
             content: "八岁时第一次学游泳".to_string(),
+            retrieval_text_en: String::new(),
             topic: String::new(),
             domain: String::new(),
             relation: default_memory_relation(),
@@ -4988,19 +5578,41 @@ mod tests {
     }
 
     #[test]
+    fn recall_normalizes_family_synonyms() {
+        let conn = Connection::open_in_memory().unwrap();
+        memory_schema(&conn);
+        insert_memory(
+            &conn,
+            "两年前翻看旧照片，看到父亲在吉林打工时意气风发的样子，感受到父与子的接力。",
+            "父亲照片回忆",
+            "家庭",
+        );
+
+        let formal = recall_memories(&conn, "父母的旧照片", 400, None, None, None).unwrap();
+        let colloquial = recall_memories(&conn, "爸妈的旧照片", 400, None, None, None).unwrap();
+
+        assert_eq!(
+            normalize_memory_content("爸妈"),
+            normalize_memory_content("父母")
+        );
+        assert!(formal.text.contains("吉林打工"));
+        assert!(colloquial.text.contains("吉林打工"));
+    }
+
+    #[test]
     fn semantic_recall_finds_related_memory_and_emits_chronological_timeline() {
         let conn = Connection::open_in_memory().unwrap();
         memory_schema(&conn);
         let earlier = insert_memory(&conn, "搬到上海生活", "人生经历", "生活");
         let later = insert_memory(&conn, "开始养一只猫", "人生经历", "生活");
         conn.execute(
-            "update memory_nodes set occurred_at = '2020-01-01', embedding = '[1.0,0.0]', embedding_model = 'test' where id = ?1",
-            params![earlier],
+            "update memory_nodes set occurred_at = '2020-01-01', embedding = '[1.0,0.0]', embedding_model = ?1 where id = ?2",
+            params![memory_embedding_key("test"), earlier],
         )
         .unwrap();
         conn.execute(
-            "update memory_nodes set occurred_at = '2023-01-01', embedding = '[0.8,0.2]', embedding_model = 'test' where id = ?1",
-            params![later],
+            "update memory_nodes set occurred_at = '2023-01-01', embedding = '[0.8,0.2]', embedding_model = ?1 where id = ?2",
+            params![memory_embedding_key("test"), later],
         )
         .unwrap();
 

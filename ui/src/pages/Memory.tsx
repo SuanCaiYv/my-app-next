@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   createMemory,
   deleteMemory,
@@ -11,7 +12,7 @@ import {
   previewMemoryRecall,
   listMemoryRecallEvents,
 } from "../api";
-import { currentModel, loadActiveLlmProfile, requestProvider } from "../llmSettings";
+import { currentModel, loadActiveLlmProfile, requestProvider, type LlmProfile } from "../llmSettings";
 import type { MemoryItem, MemorySummaryItem, MemoryRecallEvent, MemoryRecallPreview } from "../types";
 import Select from "../components/Select";
 import { useConfirm } from "../hooks/useConfirm";
@@ -113,9 +114,13 @@ export default function MemoryPage() {
   const [recalling, setRecalling] = useState(false);
   const createDialogRef = useRef<HTMLDialogElement>(null);
   const editDialogRef = useRef<HTMLDialogElement>(null);
-  const llmProfile = useMemo(() => loadActiveLlmProfile(), []);
+  const [llmProfile, setLlmProfile] = useState<LlmProfile | null>(null);
   const { show: showToast, element: toastElement } = useToast();
   const { confirm, element: confirmElement } = useConfirm();
+
+  useEffect(() => {
+    loadActiveLlmProfile().then(setLlmProfile).catch(() => {});
+  }, []);
 
   const errorMessage = (error: unknown) => error instanceof Error ? error.message : "操作失败";
 
@@ -292,6 +297,10 @@ export default function MemoryPage() {
   };
 
   const generateSummary = async () => {
+    if (!llmProfile) {
+      showToast("正在加载 LLM 配置");
+      return;
+    }
     if (!summaryTitle || !currentModel(llmProfile).trim()) {
       showToast("请选择标签或分类，并先配置 LLM 模型");
       return;
@@ -362,7 +371,11 @@ export default function MemoryPage() {
               <pre>{recallPreview.packet || "没有找到可访问的记忆"}</pre>
               <div className="recall-score-list">
                 {recallPreview.meta.scores?.map((score) => (
-                  <span className="pill" key={score.node_id}>#{score.node_id} · {score.reason} · {(score.score * 100).toFixed(1)}</span>
+                  <span className="pill" key={score.node_id}>
+                    #{score.node_id} · {score.reason} · 总 {(score.score * 100).toFixed(1)}
+                    {score.semantic_score !== undefined && ` · 语 ${(score.semantic_score * 100).toFixed(1)}`}
+                    {score.lexical_score !== undefined && ` · 词 ${(score.lexical_score * 100).toFixed(1)}`}
+                  </span>
                 ))}
               </div>
             </div>
@@ -594,8 +607,8 @@ export default function MemoryPage() {
                 placeholder="例如 2026-5-12，时分可选"
               />
             </label>
-            <label className="field"><span>重要性 {Math.round(draft.importance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={draft.importance} onChange={(event) => setDraft({ ...draft, importance: Number(event.target.value) })} /></label>
-            <label className="field"><span>情绪权重 {Math.round(draft.emotion_weight * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={draft.emotion_weight} onChange={(event) => setDraft({ ...draft, emotion_weight: Number(event.target.value) })} /></label>
+            <label className="field"><span>重要性 {Math.round(draft.importance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={draft.importance} style={{ "--range": draft.importance } as CSSProperties} onChange={(event) => setDraft({ ...draft, importance: Number(event.target.value) })} /></label>
+            <label className="field"><span>情绪权重 {Math.round(draft.emotion_weight * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={draft.emotion_weight} style={{ "--range": draft.emotion_weight } as CSSProperties} onChange={(event) => setDraft({ ...draft, emotion_weight: Number(event.target.value) })} /></label>
             <label className="field"><span>编码线索</span><textarea rows={3} placeholder={"每行一条，例如：\nplace:西湖\nemotion:离别感"} value={draft.cues_text} onChange={(event) => setDraft({ ...draft, cues_text: event.target.value })} /></label>
             <div className="dialog-actions">
               <button onClick={() => setCreateOpen(false)}>取消</button>
@@ -693,8 +706,8 @@ export default function MemoryPage() {
               </small>
             )}
           </label>
-          <label className="field"><span>重要性 {Math.round(editDraft.importance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={editDraft.importance} onChange={(event) => setEditDraft({ ...editDraft, importance: Number(event.target.value) })} /></label>
-          <label className="field"><span>情绪权重 {Math.round(editDraft.emotion_weight * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={editDraft.emotion_weight} onChange={(event) => setEditDraft({ ...editDraft, emotion_weight: Number(event.target.value) })} /></label>
+          <label className="field"><span>重要性 {Math.round(editDraft.importance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={editDraft.importance} style={{ "--range": editDraft.importance } as CSSProperties} onChange={(event) => setEditDraft({ ...editDraft, importance: Number(event.target.value) })} /></label>
+          <label className="field"><span>情绪权重 {Math.round(editDraft.emotion_weight * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={editDraft.emotion_weight} style={{ "--range": editDraft.emotion_weight } as CSSProperties} onChange={(event) => setEditDraft({ ...editDraft, emotion_weight: Number(event.target.value) })} /></label>
           <label className="field"><span>编码线索</span><textarea rows={3} placeholder="cue_type:value" value={editDraft.cues_text} onChange={(event) => setEditDraft({ ...editDraft, cues_text: event.target.value })} /></label>
           <div className="dialog-actions">
             <button disabled={savingEdit} onClick={() => {

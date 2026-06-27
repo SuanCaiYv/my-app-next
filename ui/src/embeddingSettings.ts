@@ -1,4 +1,4 @@
-import { loadActiveLlmProfile } from "./llmSettings";
+import { loadEmbeddingSettings as loadEmbeddingSettingsApi, saveEmbeddingSettings as saveEmbeddingSettingsApi } from "./api";
 
 export type EmbeddingSettings = {
   providerId: string;
@@ -18,33 +18,75 @@ export function defaultEmbeddingSettings(): EmbeddingSettings {
   };
 }
 
-export function loadEmbeddingSettings(): EmbeddingSettings {
+function loadEmbeddingSettingsFromLocalStorage(): EmbeddingSettings | null {
   const defaults = defaultEmbeddingSettings();
   const raw = localStorage.getItem(SETTINGS_KEY);
   if (raw) {
     try {
       return { ...defaults, ...JSON.parse(raw) };
     } catch {
-      // Fall through to the one-time legacy migration.
+      // Fall through to legacy migration.
     }
   }
-  const legacy = loadActiveLlmProfile();
-  if (legacy.embeddingModel?.trim()) {
+
+  const legacyRaw = localStorage.getItem("embeddingModel");
+  if (legacyRaw?.trim()) {
     return {
-      providerId: legacy.providerId,
-      apiKey: legacy.apiKey,
-      baseUrl: legacy.baseUrl,
-      model: legacy.embeddingModel.trim(),
+      providerId: localStorage.getItem("llmProvider") || "openai",
+      apiKey: localStorage.getItem("apiKey") || "",
+      baseUrl: localStorage.getItem("baseUrl") || "",
+      model: legacyRaw.trim(),
     };
   }
-  return defaults;
+
+  return null;
 }
 
-export function saveEmbeddingSettings(settings: EmbeddingSettings) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+function clearLegacyEmbeddingLocalStorage() {
+  localStorage.removeItem(SETTINGS_KEY);
+  localStorage.removeItem("embeddingModel");
+}
+
+export async function loadEmbeddingSettings(): Promise<EmbeddingSettings> {
+  try {
+    const settings = await loadEmbeddingSettingsApi();
+    if (settings.baseUrl.trim() || settings.model.trim()) {
+      return {
+        ...defaultEmbeddingSettings(),
+        ...settings,
+        apiKey: settings.apiKey.trim(),
+        baseUrl: settings.baseUrl.trim(),
+        model: settings.model.trim(),
+      };
+    }
+  } catch {
+    // Fall back to localStorage and attempt migration.
+  }
+
+  const legacy = loadEmbeddingSettingsFromLocalStorage();
+  if (legacy) {
+    try {
+      await saveEmbeddingSettingsApi({
+        ...legacy,
+        apiKey: legacy.apiKey.trim(),
+        baseUrl: legacy.baseUrl.trim(),
+        model: legacy.model.trim(),
+      });
+      clearLegacyEmbeddingLocalStorage();
+    } catch {
+      // If backend save fails, still return local values so the app works.
+    }
+    return legacy;
+  }
+
+  return defaultEmbeddingSettings();
+}
+
+export async function saveEmbeddingSettings(settings: EmbeddingSettings) {
+  await saveEmbeddingSettingsApi({
     ...settings,
     apiKey: settings.apiKey.trim(),
     baseUrl: settings.baseUrl.trim(),
     model: settings.model.trim(),
-  }));
+  });
 }

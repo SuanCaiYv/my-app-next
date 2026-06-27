@@ -18,72 +18,14 @@
   min-width: 680px;
   -webkit-app-region: drag;
   app-region: drag;
+  cursor: default;
 }
 
-body.desktop-app .topbar {
-  width: min(calc(100% - 112px), 1360px);
-  margin-top: 30px;
-  padding: 12px 28px;
-}
-
-body[data-view="chat"] .topbar {
-  position: relative;
-  top: auto;
-}
-
-.brand {
-  position: relative;
-  grid-column: 1;
-  z-index: 10;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-  border: 0;
-  border-radius: 8px;
-  padding: 0;
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: none;
-  font-size: 20px;
-  font-weight: 750;
-  text-align: left;
-  width: fit-content;
-  letter-spacing: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 66px;
-  justify-self: start;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.brand img {
-  width: 66px;
-  height: 66px;
-  display: block;
-  object-fit: contain;
-  filter: drop-shadow(0 6px 12px rgb(36 44 47 / 8%));
-  transform: translateY(2px);
-}
-
-.brand-name {
-  line-height: 1;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.brand-hit-spacer {
-  width: 24px;
-  height: 1px;
-  flex: 0 0 24px;
-}
-
-.brand-tap-progress {
+.topbar-tap-progress {
   position: absolute;
   inset: 0;
-  z-index: -1;
-  border-radius: 8px;
+  z-index: 0;
+  border-radius: 24px;
   background: linear-gradient(
     135deg,
     #ff4d4d,
@@ -102,20 +44,15 @@ body[data-view="chat"] .topbar {
   transition: clip-path 160ms ease, -webkit-clip-path 160ms ease;
 }
 
-.brand::before,
-.brand::after {
-  content: none;
+body.desktop-app .topbar {
+  width: min(calc(100% - 112px), 1360px);
+  margin-top: 30px;
+  padding: 12px 28px;
 }
 
-.brand:hover {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-.brand.hidden {
-  display: none;
+body[data-view="chat"] .topbar {
+  position: relative;
+  top: auto;
 }
 
 .tabs {
@@ -125,7 +62,8 @@ body[data-view="chat"] .topbar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  position: static;
+  position: relative;
+  z-index: 1;
   justify-self: center;
   margin: 0;
   gap: 6px;
@@ -279,7 +217,7 @@ body[data-view="photos"] #photoList::-webkit-scrollbar {
   display: grid;
   grid-template-columns: repeat(auto-fill, 300px);
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
   justify-content: center;
 }
 
@@ -307,9 +245,17 @@ body[data-view="photos"] .photo-grid .operation-card {
   --form-control-height: 48px;
   min-height: 160px;
   height: auto;
-  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-self: start;
   gap: 12px;
-  padding: 18px 14px 10px;
+  padding: 18px 14px;
+}
+
+body[data-view="posts"] .list .operation-card {
+  height: var(--post-card-height);
+  min-height: var(--post-card-height);
+  max-height: var(--post-card-height);
 }
 
 body[data-view="posts"] .list .operation-card input,

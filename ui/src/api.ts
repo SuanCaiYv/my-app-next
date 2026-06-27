@@ -15,6 +15,8 @@ import type {
   LocationDetail,
   ExtractLocationsRequest,
 } from "./types";
+import type { LlmProfile } from "./llmSettings";
+import type { EmbeddingSettings } from "./embeddingSettings";
 
 let token = localStorage.getItem("ownerToken") || "";
 
@@ -167,6 +169,41 @@ export async function testEmbeddingConnection(body: {
   provider?: string;
 }) {
   return api<{ ok: boolean; model: string; dimensions: number; elapsed_ms: number }>("/api/embeddings/test", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function loadLlmSettings() {
+  return api<{ profiles: LlmProfile[]; activeId: string }>("/api/settings/llm");
+}
+
+export async function saveLlmSettings(body: { profiles: LlmProfile[]; activeId: string }) {
+  return api<{ ok: boolean }>("/api/settings/llm", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function loadEmbeddingSettings() {
+  return api<EmbeddingSettings>("/api/settings/embedding");
+}
+
+export async function saveEmbeddingSettings(body: EmbeddingSettings) {
+  return api<{ ok: boolean }>("/api/settings/embedding", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type AppSettings = { amapKey: string };
+
+export async function loadAppSettings() {
+  return api<AppSettings>("/api/settings/app");
+}
+
+export async function saveAppSettings(body: AppSettings) {
+  return api<{ ok: boolean }>("/api/settings/app", {
     method: "POST",
     body: JSON.stringify(body),
   });

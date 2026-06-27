@@ -1,3 +1,5 @@
+import { loadLlmSettings, saveLlmSettings } from "./api";
+
 export type LlmProfile = {
   id: string;
   name: string;
@@ -86,7 +88,7 @@ function normalizeProfile(value: Partial<LlmProfile>, index = 0): LlmProfile {
   });
 }
 
-export function loadLlmProfiles(): { profiles: LlmProfile[]; activeId: string } {
+function loadLlmProfilesFromLocalStorage(): { profiles: LlmProfile[]; activeId: string } | null {
   const raw = localStorage.getItem(PROFILES_KEY);
   if (raw) {
     try {
@@ -105,53 +107,66 @@ export function loadLlmProfiles(): { profiles: LlmProfile[]; activeId: string } 
   }
 
   const legacy = profileFromLegacy();
-  return { profiles: [legacy], activeId: legacy.id };
+  if (legacy.apiKey || legacy.baseUrl || legacy.modelPreset) {
+    return { profiles: [legacy], activeId: legacy.id };
+  }
+  return null;
 }
 
-export function saveLlmProfiles(profiles: LlmProfile[], activeId: string) {
+function clearLegacyLlmLocalStorage() {
+  localStorage.removeItem(PROFILES_KEY);
+  localStorage.removeItem(ACTIVE_PROFILE_KEY);
+  localStorage.removeItem("llmProvider");
+  localStorage.removeItem("apiKey");
+  localStorage.removeItem("baseUrl");
+  localStorage.removeItem("modelPreset");
+  localStorage.removeItem("customModel");
+  localStorage.removeItem("model");
+  localStorage.removeItem("embeddingModel");
+  localStorage.removeItem("contextLimit");
+  localStorage.removeItem("titlePrompt");
+  localStorage.removeItem("tagsPrompt");
+  localStorage.removeItem("locationPrompt");
+}
+
+export async function loadLlmProfiles(): Promise<{ profiles: LlmProfile[]; activeId: string }> {
+  try {
+    const settings = await loadLlmSettings();
+    if (settings.profiles.length > 0) {
+      return {
+        profiles: settings.profiles.map((item, index) => normalizeProfile(item, index)),
+        activeId: settings.activeId || settings.profiles[0].id,
+      };
+    }
+  } catch {
+    // Fall back to localStorage and attempt migration.
+  }
+
+  const legacy = loadLlmProfilesFromLocalStorage();
+  if (legacy) {
+    try {
+      await saveLlmSettings({ profiles: legacy.profiles, activeId: legacy.activeId });
+      clearLegacyLlmLocalStorage();
+    } catch {
+      // If backend save fails, still return local values so the app works.
+    }
+    return legacy;
+  }
+
+  const fallback = createLlmProfile();
+  return { profiles: [fallback], activeId: fallback.id };
+}
+
+export async function saveLlmProfiles(profiles: LlmProfile[], activeId: string) {
   const safeProfiles = profiles.length > 0 ? profiles : [createLlmProfile()];
   const safeActiveId = safeProfiles.some((profile) => profile.id === activeId)
     ? activeId
     : safeProfiles[0].id;
-  localStorage.setItem(PROFILES_KEY, JSON.stringify(safeProfiles));
-  localStorage.setItem(ACTIVE_PROFILE_KEY, safeActiveId);
-
-  const active = safeProfiles.find((profile) => profile.id === safeActiveId) || safeProfiles[0];
-  localStorage.setItem("llmProvider", active.providerId);
-  localStorage.setItem("apiKey", active.apiKey);
-  localStorage.setItem("baseUrl", active.baseUrl);
-  localStorage.setItem("modelPreset", active.modelPreset);
-  localStorage.setItem("customModel", active.customModel);
-  localStorage.setItem("model", currentModel(active));
-  if (active.embeddingModel.trim()) {
-    localStorage.setItem("embeddingModel", active.embeddingModel.trim());
-  } else {
-    localStorage.removeItem("embeddingModel");
-  }
-  if (active.contextLimit.trim()) {
-    localStorage.setItem("contextLimit", active.contextLimit);
-  } else {
-    localStorage.removeItem("contextLimit");
-  }
-  if (active.titlePrompt.trim()) {
-    localStorage.setItem("titlePrompt", active.titlePrompt);
-  } else {
-    localStorage.removeItem("titlePrompt");
-  }
-  if (active.tagsPrompt.trim()) {
-    localStorage.setItem("tagsPrompt", active.tagsPrompt);
-  } else {
-    localStorage.removeItem("tagsPrompt");
-  }
-  if (active.locationPrompt.trim()) {
-    localStorage.setItem("locationPrompt", active.locationPrompt);
-  } else {
-    localStorage.removeItem("locationPrompt");
-  }
+  await saveLlmSettings({ profiles: safeProfiles, activeId: safeActiveId });
 }
 
-export function loadActiveLlmProfile(): LlmProfile {
-  const { profiles, activeId } = loadLlmProfiles();
+export async function loadActiveLlmProfile(): Promise<LlmProfile> {
+  const { profiles, activeId } = await loadLlmProfiles();
   return profiles.find((profile) => profile.id === activeId) || profiles[0];
 }
 

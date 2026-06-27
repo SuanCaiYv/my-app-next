@@ -171,6 +171,22 @@ dialog::backdrop {
   font-size: 14px;
 }
 
+.reader-head-icon-btn {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reader-head-icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 .reader-locations {
   display: flex;
   flex-wrap: wrap;

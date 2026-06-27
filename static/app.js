@@ -13,6 +13,7 @@ const state = {
   chatting: false,
   chatContext: { postIds: [], photoIds: [], freeText: "" },
   sentChatContext: { postIds: [], photoIds: [], freeText: "" },
+  chatExpandedPicker: null,
   pendingChatFreeText: null,
   chatSessions: [],
   currentChatSessionId: null,
@@ -527,9 +528,14 @@ function bindEvents() {
   });
   $("model").addEventListener("input", scheduleTokenMeterRender);
   document.querySelectorAll("[data-open-picker]").forEach((button) => {
-    button.addEventListener("click", () =>
-      openPickerDialog(button.dataset.openPicker, button.dataset.pickerTarget || "analysis")
-    );
+    button.addEventListener("click", () => {
+      const target = button.dataset.pickerTarget || "analysis";
+      if (target === "chat") {
+        toggleChatPickerExpansion(button.dataset.openPicker);
+        return;
+      }
+      openPickerDialog(button.dataset.openPicker, target);
+    });
   });
   document.querySelectorAll("[data-chat-select-all]").forEach((button) => {
     button.addEventListener("click", () => toggleChatContextSelection(button.dataset.chatSelectAll));
@@ -548,7 +554,6 @@ function bindEvents() {
       renderTokenMeter();
       return;
     }
-    openPickerDialog("posts", "chat");
   });
   $("chatPhotos").addEventListener("click", (event) => {
     if (event.target.matches("input")) {
@@ -556,7 +561,6 @@ function bindEvents() {
       renderTokenMeter();
       return;
     }
-    openPickerDialog("photos", "chat");
   });
   $("pickerDialog").addEventListener("close", applyPickerSelection);
   $("modelPreset").addEventListener("change", () => {
@@ -1254,6 +1258,25 @@ function updateChatSelectAllButtons() {
     const allSelected = inputs.length > 0 && inputs.every((input) => input.checked);
     button.textContent = allSelected ? "清空" : "全选";
     button.disabled = inputs.length === 0;
+  });
+}
+
+function toggleChatPickerExpansion(mode) {
+  state.chatExpandedPicker = state.chatExpandedPicker === mode ? null : mode;
+  syncChatPickerExpansion();
+}
+
+function syncChatPickerExpansion() {
+  const grid = document.querySelector(".chat-context .picker-grid");
+  if (!grid) return;
+  const expanded = state.chatExpandedPicker;
+  grid.classList.toggle("has-expanded", Boolean(expanded));
+  grid.classList.toggle("picker-expanded-posts", expanded === "posts");
+  grid.classList.toggle("picker-expanded-photos", expanded === "photos");
+  document.querySelectorAll("[data-open-picker][data-picker-target=\"chat\"]").forEach((button) => {
+    const isExpanded = button.dataset.openPicker === expanded;
+    button.textContent = isExpanded ? "收起" : "展开";
+    button.closest(".picker-panel")?.classList.toggle("is-expanded", isExpanded);
   });
 }
 

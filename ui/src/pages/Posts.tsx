@@ -1,7 +1,8 @@
 import { useEffect, useImperativeHandle, useMemo, useState, useCallback, useRef, forwardRef } from "react";
+import { FilePenLine, FileText, Folder, Lightbulb, Map, NotebookPen, Pencil, Send, Sparkles, Tag, Trash2, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLoading } from "../context/LoadingContext";
-import { listPosts, createPost, updatePost, deletePost, analyze, extractLocations, listPostLocations, addPostLocation, removePostLocation } from "../api";
+import { listPosts, createPost, updatePost, deletePost, analyze, extractLocations, listPostLocations, addPostLocation, removePostLocation, loadAppSettings } from "../api";
 import type { LocationItem, PostItem } from "../types";
 import Select from "../components/Select";
 import { useToast } from "../hooks/useToast";
@@ -9,8 +10,21 @@ import { useConfirm } from "../hooks/useConfirm";
 import { currentModel, DEFAULT_LOCATION_PROMPT, DEFAULT_TAGS_PROMPT, DEFAULT_TITLE_PROMPT, loadActiveLlmProfile, requestProvider } from "../llmSettings";
 import { formatDateTimeText, parseDateTimeText } from "../utils/dateTime";
 
+function kindIcon(kind: string, size = 16) {
+  switch (kind) {
+    case "article": return <FileText size={size} strokeWidth={2} aria-label="文章" />;
+    case "thought": return <Lightbulb size={size} strokeWidth={2} aria-label="想法" />;
+    case "note": return <NotebookPen size={size} strokeWidth={2} aria-label="随手写" />;
+    default: return <span>{kind}</span>;
+  }
+}
 function kindName(kind: string) {
   return { article: "文章", thought: "想法", note: "随手写" }[kind] || kind;
+}
+function statusIcon(status: string, size = 16) {
+  return status === "published"
+    ? <Send size={size} strokeWidth={2} aria-label="发布" />
+    : <FilePenLine size={size} strokeWidth={2} aria-label="草稿" />;
 }
 function statusName(status: string) {
   return status === "published" ? "发布" : "草稿";
@@ -24,6 +38,10 @@ function tagList(tags: string) {
     .split(/[,，、\s]+/)
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+function PostPreview({ text }: { text: string }) {
+  return <div className="body preview">{text}</div>;
 }
 
 // ── Tag / Category color palette ──────────────────────────────
@@ -252,13 +270,13 @@ export default function PostsPage({
   };
 
   const handleExtractLocations = async (postId: number) => {
-    const llmProfile = loadActiveLlmProfile();
+    const llmProfile = await loadActiveLlmProfile();
     const model = currentModel(llmProfile);
     if (!model.trim()) {
       showToast("先在 LLM 分析页填写模型");
       return [];
     }
-    const amapKey = localStorage.getItem("amapKey") || "";
+    const amapKey = (await loadAppSettings().catch(() => ({ amapKey: "" }))).amapKey || "";
     if (!amapKey.trim()) {
       showToast("先在设置页填写高德 Key");
       return [];
@@ -282,7 +300,7 @@ export default function PostsPage({
   };
 
   const handleGenerateTags = async (body: string, category: string, title: string) => {
-    const llmProfile = loadActiveLlmProfile();
+    const llmProfile = await loadActiveLlmProfile();
     const model = currentModel(llmProfile);
     if (!model.trim()) {
       showToast("先在 LLM 分析页填写模型");
@@ -312,7 +330,7 @@ export default function PostsPage({
   };
 
   const handleGenerateTitle = async (body: string, category: string, tags: string) => {
-    const llmProfile = loadActiveLlmProfile();
+    const llmProfile = await loadActiveLlmProfile();
     const model = currentModel(llmProfile);
     if (!model.trim()) {
       showToast("先在 LLM 分析页填写模型");
@@ -367,16 +385,22 @@ export default function PostsPage({
               <div className="post-head">
                 <div>
                   <h2 className="post-title">{post.title}</h2>
+                  <div className="post-time">{formatDateTimeText(post.updated_at)}</div>
                   <div className="meta">
                     <span className="pill pill-kind clickable" onClick={(e) => { e.stopPropagation(); applyKindFilter(post.kind); }}>{kindName(post.kind)}</span>
                     <span className={`pill pill-status ${statusPillClass(post.status)}`}>{statusName(post.status)}</span>
                     {post.category && (() => { const c = getTagColor(post.category); return <span className="pill pill-category clickable" style={{ background: c.bg, borderColor: c.border, color: c.text }} onClick={(e) => { e.stopPropagation(); applyCategoryFilter(post.category); }}>{post.category}</span>; })()}
-                    {tagList(post.tags).length > 0 && <span className="tags-row">{tagList(post.tags).map((tag) => { const c = getTagColor(tag); return <span key={tag} className="pill pill-tag clickable" style={{ background: c.bg, borderColor: c.border, color: c.text }} onClick={(e) => { e.stopPropagation(); applyTagFilter(tag); }}>{tag}</span>; })}</span>}
-                    <span className="meta-date">{formatDateTimeText(post.updated_at)}</span>
+                    {tagList(post.tags).length > 0 ? (
+                      <span className="tags-row">{tagList(post.tags).map((tag) => { const c = getTagColor(tag); return <span key={tag} className="pill pill-tag clickable" style={{ background: c.bg, borderColor: c.border, color: c.text }} onClick={(e) => { e.stopPropagation(); applyTagFilter(tag); }}>{tag}</span>; })}</span>
+                    ) : (
+                      <span className="tags-row">
+                        <span className="pill pill-tag pill-tag-empty">标签+1</span>
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
-              <div className="body preview">{post.body}</div>
+              <PostPreview text={post.body} />
             </article>
           ))
         )}
@@ -556,8 +580,14 @@ export function PostViewDialog({
           </div>
           <div className="head-actions">
             <div className="reader-head-buttons">
-              {role === "owner" && editorActions && <button className="primary" onClick={enterEdit}>编辑</button>}
-              <button className="secondary" onClick={requestClose}>关闭</button>
+              {role === "owner" && editorActions && (
+                <button className="primary reader-head-icon-btn" onClick={enterEdit} aria-label="编辑" title="编辑">
+                  <Pencil size={20} strokeWidth={2} />
+                </button>
+              )}
+              <button className="secondary reader-head-icon-btn" onClick={requestClose} aria-label="关闭" title="关闭">
+                <X size={22} strokeWidth={2} />
+              </button>
             </div>
             <span className="reader-head-time">{formatDateTimeText(post.updated_at)}</span>
           </div>
@@ -687,6 +717,7 @@ interface EditorFormProps {
 
 export interface EditorFormHandle {
   save: () => Promise<void>;
+  validateClose: () => { canClose: boolean; shouldSave: boolean; message?: string };
 }
 
 const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function EditorForm({
@@ -758,7 +789,20 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
     }
   };
 
-  useImperativeHandle(ref, () => ({ save: handleSave }));
+  useImperativeHandle(ref, () => ({
+    save: handleSave,
+    validateClose: () => {
+      const bodyTrimmed = body.trim();
+      const titleTrimmed = title.trim();
+      if (!bodyTrimmed && !titleTrimmed) {
+        return { canClose: true, shouldSave: false };
+      }
+      if (bodyTrimmed && !titleTrimmed) {
+        return { canClose: false, shouldSave: false, message: "必须写点标题" };
+      }
+      return { canClose: true, shouldSave: true };
+    },
+  }));
 
   const handleGenerate = async () => {
     if (!body.trim()) {
@@ -893,28 +937,23 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
           autoFocus
         />
         <div className="editor-actions">
-          <button className="post-editor-ai plain" type="button" onClick={handleGenerate} disabled={generating}>
-            {generating ? "..." : "AI"}
+          <button className="post-editor-ai plain" type="button" onClick={handleGenerate} disabled={generating} aria-label="AI 生成" title="AI 生成">
+            {generating ? "..." : <Sparkles size={18} strokeWidth={2} />}
           </button>
           {onDelete && (
             <button className="danger post-editor-delete plain" type="button" onClick={onDelete} aria-label="删除" title="删除">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M3 6h18" />
-                <path d="M8 6V4h8v2" />
-                <path d="M6 6l1 15h10l1-15" />
-                <path d="M10 11v6" />
-                <path d="M14 11v6" />
-              </svg>
+              <Trash2 size={18} strokeWidth={2} />
             </button>
           )}
           {onExtractLocations && (
-            <button type="button" className="editor-extract-locations" onClick={handleExtract} disabled={extractingLocations}>
-              <span>📍</span>
-              <span>{extractingLocations ? "..." : "提取地点"}</span>
+            <button type="button" className="editor-extract-locations" onClick={handleExtract} disabled={extractingLocations} aria-label="提取地点" title="提取地点">
+              {extractingLocations ? "..." : <Map size={18} strokeWidth={2} />}
             </button>
           )}
           {onCancel && (
-            <button className="secondary post-editor-cancel plain" type="button" onClick={onCancel}>取消</button>
+            <button className="secondary post-editor-cancel plain" type="button" onClick={onCancel} aria-label="取消" title="取消">
+              <X size={18} strokeWidth={2} />
+            </button>
           )}
         </div>
       </div>
@@ -956,16 +995,19 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
       )}
 
       <div className="editor-footer">
-        <div className="editor-field">
+        <div className="editor-field editor-field-with-icon">
+          <Folder size={16} strokeWidth={2} className="editor-field-icon" aria-hidden="true" />
           <input
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             onBlur={() => setCategory((value) => normalizeCategory(value))}
-            placeholder="分类"
+            placeholder=""
+            aria-label="分类"
           />
         </div>
         <div className="editor-field editor-tags">
           <div className="editor-tags-row">
+            <Tag size={16} strokeWidth={2} className="editor-tags-icon" aria-hidden="true" />
             {tagItems.map((tag) => (
               <span key={tag} className="editor-tag-pill">
                 {tag}
@@ -977,12 +1019,14 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
               onChange={(e) => setTagInput(e.target.value)}
               onKeyDown={handleTagKeyDown}
               onBlur={handleTagBlur}
-              placeholder={tagItems.length === 0 ? "标签，回车添加" : ""}
+              placeholder=""
+              aria-label="标签，回车添加"
             />
           </div>
+          {(generatingTags || tagInput.trim().length > 0) && <span className="editor-tags-pending">pending</span>}
           {onGenerateTags && (
             <button className="editor-ai-tags plain" type="button" onClick={handleGenerateTags} disabled={generatingTags} aria-label="生成标签" title="生成标签">
-              {generatingTags ? "..." : "AI"}
+              {generatingTags ? "..." : <Sparkles size={16} strokeWidth={2} />}
             </button>
           )}
         </div>
@@ -992,9 +1036,9 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
             ariaLabel="类型"
             onChange={(value) => setKind(value as PostItem["kind"])}
             options={[
-              { value: "article", label: "文章" },
-              { value: "thought", label: "想法" },
-              { value: "note", label: "随手写" },
+              { value: "article", label: kindIcon("article") },
+              { value: "thought", label: kindIcon("thought") },
+              { value: "note", label: kindIcon("note") },
             ]}
           />
         </div>
@@ -1004,8 +1048,8 @@ const EditorForm = forwardRef<EditorFormHandle, EditorFormProps>(function Editor
             ariaLabel="状态"
             onChange={(value) => setStatus(value as PostItem["status"])}
             options={[
-              { value: "draft", label: "草稿" },
-              { value: "published", label: "发布" },
+              { value: "draft", label: statusIcon("draft") },
+              { value: "published", label: statusIcon("published") },
             ]}
           />
         </div>
@@ -1062,6 +1106,7 @@ function PostEditDialog({
   const [closing, setClosing] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const editorRef = useRef<EditorFormHandle>(null);
 
   useEffect(() => {
     if (post) {
@@ -1100,12 +1145,22 @@ function PostEditDialog({
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
-          requestClose();
+          const validation = editorRef.current?.validateClose();
+          if (!validation || !validation.canClose) {
+            if (validation?.message) alert(validation.message);
+            return;
+          }
+          if (validation.shouldSave) {
+            void editorRef.current?.save().then(() => requestClose());
+          } else {
+            requestClose();
+          }
         }
       }}
     >
       <section className="dialog-body post-editor">
         <EditorForm
+          ref={editorRef}
           post={post}
           onSave={async (payload) => {
             await onSave(payload);
